@@ -128,6 +128,20 @@ async def test_client_task_lifecycle_via_rest(live_broker):
         await client_b.stop()
 
 
+async def test_client_heartbeat_updates_last_heartbeat(live_broker):
+    url, (key_a, _), _ = live_broker
+    client = BrokerClient(broker_url=url, api_key=key_a, heartbeat_interval=0.1)
+    try:
+        await client.start()
+        assert client.agent is not None
+        initial = client.agent.last_heartbeat
+        await asyncio.sleep(0.4)
+        fresh = await client.get_me()
+        assert fresh.last_heartbeat > initial
+    finally:
+        await client.stop()
+
+
 async def test_client_invalid_key_raises(live_broker):
     url, _, _ = live_broker
     client = BrokerClient(broker_url=url, api_key="mab-ak-totally-fake")

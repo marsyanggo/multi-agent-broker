@@ -115,6 +115,7 @@ class BrokerClient:
     async def _run_ws_loop(self) -> None:
         backoff = 1.0
         while not self._stop_evt.is_set():
+            hb_task: asyncio.Task[None] | None = None
             try:
                 async with websockets.connect(
                     self.ws_url,
@@ -125,7 +126,16 @@ class BrokerClient:
                     self._ws = ws
                     log.info("connected: %s", self.ws_url)
                     backoff = 1.0
-                    await self._receive_loop(ws)
+                    hb_task = asyncio.create_task(self._heartbeat_loop(ws))
+                    try:
+                        await self._receive_loop(ws)
+                    finally:
+                        hb_task.cancel()
+                        try:
+                            await hb_task
+                        except (asyncio.CancelledError, Exception):
+                            pass
+                        hb_task = None
             except asyncio.CancelledError:
                 raise
             except Exception as e:
@@ -142,6 +152,17 @@ class BrokerClient:
             except asyncio.TimeoutError:
                 pass
             backoff = min(backoff * 2, _MAX_BACKOFF_SECONDS)
+
+    async def _heartbeat_loop(self, ws: Any) -> None:
+        # Application-layer text heartbeat. Broker only updates last_heartbeat
+        # on receive_text(); protocol-level WS pings don't reach that handler,
+        # so without this loop the DB heartbeat freezes after connect.
+        while True:
+            await asyncio.sleep(self.heartbeat_interval)
+            try:
+                await ws.send("hb")
+            except Exception:
+                return
 
     async def _receive_loop(self, ws: Any) -> None:
         async for raw in ws:
