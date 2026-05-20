@@ -3,7 +3,8 @@ name = "multi-agent-broker"
 version = "0.1.0"
 description = "LLM-agnostic multi-agent collaboration broker"
 authors = [{ name = "Mars Yang", email = "marsyanggo@gmail.com" }]
-license = { text = "Apache-2.0" }
+license = "Apache-2.0"
+license-files = ["LICENSE", "NOTICE"]
 readme = "README.md"
 requires-python = ">=3.11"
 dependencies = [

@@ -15,9 +15,5 @@ limitations under the License.
 
 ---
 
-This project was developed independently on personal time using personal devices.
-No employer-confidential information, vendor-private APIs, or proprietary code
-is included.
-
 Third-party dependencies are listed in pyproject.toml and retain their
 respective licenses. See each package's license for details.
