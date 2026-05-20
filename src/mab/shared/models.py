@@ -60,6 +60,8 @@ class Task(BaseModel):
     priority: TaskPriority = "normal"
     result: str | None = None
     notes: list[str] = Field(default_factory=list)
+    required_all: list[str] = Field(default_factory=list)
+    required_any: list[str] = Field(default_factory=list)
     created_at: datetime
     updated_at: datetime
     completed_at: datetime | None = None

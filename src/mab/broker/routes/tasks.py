@@ -8,6 +8,7 @@ from pydantic import BaseModel
 from mab.broker.auth import get_current_agent, get_db
 from mab.broker.db import Database
 from mab.broker.websocket import WebSocketHub, get_hub
+from mab.shared.capabilities import matches_capabilities
 from mab.shared.models import Agent, Task, TaskPriority, TaskStatus
 
 router = APIRouter(prefix="/api/v1/tasks", tags=["tasks"])
@@ -18,6 +19,8 @@ class CreateTaskRequest(BaseModel):
     description: str = ""
     assigned_to: str | None = None
     priority: TaskPriority = "normal"
+    required_all: list[str] = []
+    required_any: list[str] = []
 
 
 class UpdateTaskRequest(BaseModel):
@@ -34,16 +37,34 @@ async def create_task(
     hub: Annotated[WebSocketHub, Depends(get_hub)],
 ) -> Task:
     if body.assigned_to is not None:
-        if await db.get_agent(body.assigned_to) is None:
+        assignee = await db.get_agent(body.assigned_to)
+        if assignee is None:
             raise HTTPException(status_code=404, detail="assigned_to agent not found")
+        if not matches_capabilities(
+            assignee.capabilities, body.required_all, body.required_any
+        ):
+            raise HTTPException(
+                status_code=400,
+                detail="assigned_to agent lacks required capabilities",
+            )
     task = await db.create_task(
         title=body.title,
         description=body.description,
         created_by=me.id,
         assigned_to=body.assigned_to,
         priority=body.priority,
+        required_all=body.required_all,
+        required_any=body.required_any,
     )
-    await hub.emit_task_event("created", task)
+    extra_targets: list[str] = []
+    if task.assigned_to is None:
+        matched = await db.find_matching_agents(
+            required_all=task.required_all,
+            required_any=task.required_any,
+            status="online",
+        )
+        extra_targets = [a.id for a in matched]
+    await hub.emit_task_event("created", task, extra_targets=extra_targets)
     return task
 
 
@@ -83,14 +104,22 @@ async def claim_task(
     db: Annotated[Database, Depends(get_db)],
     hub: Annotated[WebSocketHub, Depends(get_hub)],
 ) -> Task:
+    existing = await db.get_task(task_id)
+    if existing is None:
+        raise HTTPException(status_code=404, detail="task not found")
+    if not matches_capabilities(
+        me.capabilities, existing.required_all, existing.required_any
+    ):
+        raise HTTPException(
+            status_code=403,
+            detail="agent lacks required capabilities for this task",
+        )
     claimed = await db.claim_task(task_id=task_id, agent_id=me.id)
     if claimed is None:
-        existing = await db.get_task(task_id)
-        if existing is None:
-            raise HTTPException(status_code=404, detail="task not found")
-        raise HTTPException(
-            status_code=409, detail=f"task already {existing.status}"
-        )
+        # Lost the race: re-read for accurate status in error message.
+        current = await db.get_task(task_id)
+        status = current.status if current else "missing"
+        raise HTTPException(status_code=409, detail=f"task already {status}")
     await db.set_current_task(me.id, claimed.id)
     await hub.emit_task_event("claimed", claimed)
     return claimed

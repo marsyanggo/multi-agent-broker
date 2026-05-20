@@ -208,3 +208,104 @@ async def test_list_tasks_filters(two_agents):
         )
         assert len(r.json()) == 1
         assert r.json()[0]["title"] == "t2"
+
+
+async def test_update_agent_capabilities(two_agents):
+    app, (key_a, agent_a), _ = two_agents
+    async with AsyncClient(
+        transport=ASGITransport(app=app), base_url="http://t"
+    ) as c:
+        r = await c.patch(
+            "/api/v1/agents/me",
+            headers=_auth(key_a),
+            json={"capabilities": ["model:claude-opus-4-7", "tier:opus"]},
+        )
+        assert r.status_code == 200
+        assert r.json()["capabilities"] == ["model:claude-opus-4-7", "tier:opus"]
+
+        r = await c.get("/api/v1/agents/me", headers=_auth(key_a))
+        assert "tier:opus" in r.json()["capabilities"]
+
+
+async def test_create_task_stores_capability_requirements(two_agents):
+    app, (key_a, _), _ = two_agents
+    async with AsyncClient(
+        transport=ASGITransport(app=app), base_url="http://t"
+    ) as c:
+        r = await c.post(
+            "/api/v1/tasks",
+            headers=_auth(key_a),
+            json={
+                "title": "needs opus",
+                "required_all": ["tier:opus"],
+                "required_any": ["vision", "audio"],
+            },
+        )
+        assert r.status_code == 201
+        body = r.json()
+        assert body["required_all"] == ["tier:opus"]
+        assert body["required_any"] == ["vision", "audio"]
+
+
+async def test_claim_blocked_when_agent_lacks_capabilities(two_agents):
+    app, (key_a, _), (key_b, _) = two_agents
+    async with AsyncClient(
+        transport=ASGITransport(app=app), base_url="http://t"
+    ) as c:
+        r = await c.post(
+            "/api/v1/tasks",
+            headers=_auth(key_a),
+            json={"title": "opus only", "required_all": ["tier:opus"]},
+        )
+        task_id = r.json()["id"]
+
+        # bob has no capabilities → 403.
+        r = await c.post(f"/api/v1/tasks/{task_id}/claim", headers=_auth(key_b))
+        assert r.status_code == 403
+        assert "capabilities" in r.json()["detail"]
+
+
+async def test_claim_succeeds_when_capabilities_match(two_agents):
+    app, (key_a, _), (key_b, agent_b) = two_agents
+    async with AsyncClient(
+        transport=ASGITransport(app=app), base_url="http://t"
+    ) as c:
+        # Give bob the required capability.
+        await c.patch(
+            "/api/v1/agents/me",
+            headers=_auth(key_b),
+            json={"capabilities": ["tier:opus", "vision"]},
+        )
+        r = await c.post(
+            "/api/v1/tasks",
+            headers=_auth(key_a),
+            json={
+                "title": "opus + vision",
+                "required_all": ["tier:opus"],
+                "required_any": ["vision", "audio"],
+            },
+        )
+        task_id = r.json()["id"]
+
+        r = await c.post(f"/api/v1/tasks/{task_id}/claim", headers=_auth(key_b))
+        assert r.status_code == 200
+        assert r.json()["assigned_to"] == agent_b.id
+
+
+async def test_directed_assignment_validates_capabilities(two_agents):
+    app, (key_a, _), (_, agent_b) = two_agents
+    async with AsyncClient(
+        transport=ASGITransport(app=app), base_url="http://t"
+    ) as c:
+        # bob has no capabilities; directed assignment with reqs must reject.
+        r = await c.post(
+            "/api/v1/tasks",
+            headers=_auth(key_a),
+            json={
+                "title": "wrong fit",
+                "assigned_to": agent_b.id,
+                "required_all": ["tier:opus"],
+            },
+        )
+        assert r.status_code == 400
+        assert "capabilities" in r.json()["detail"]

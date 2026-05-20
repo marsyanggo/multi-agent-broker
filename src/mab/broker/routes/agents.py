@@ -12,8 +12,9 @@ from mab.shared.models import Agent, AgentStatus
 router = APIRouter(prefix="/api/v1/agents", tags=["agents"])
 
 
-class UpdateAgentStatusRequest(BaseModel):
-    status: AgentStatus
+class UpdateAgentRequest(BaseModel):
+    status: AgentStatus | None = None
+    capabilities: list[str] | None = None
 
 
 @router.get("", response_model=list[Agent])
@@ -34,11 +35,14 @@ async def get_me(
 
 @router.patch("/me", response_model=Agent)
 async def update_me(
-    body: UpdateAgentStatusRequest,
+    body: UpdateAgentRequest,
     me: Annotated[Agent, Depends(get_current_agent)],
     db: Annotated[Database, Depends(get_db)],
 ) -> Agent:
-    await db.set_agent_status(me.id, body.status)
+    if body.status is not None:
+        await db.set_agent_status(me.id, body.status)
+    if body.capabilities is not None:
+        await db.update_agent_capabilities(me.id, body.capabilities)
     updated = await db.get_agent(me.id)
     assert updated is not None
     return updated

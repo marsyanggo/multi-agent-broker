@@ -195,3 +195,56 @@ def test_ws_task_event_claim_notifies_creator(setup):
             assert claimed_ev["type"] == "task_event"
             assert claimed_ev["payload"]["event"] == "claimed"
             assert claimed_ev["payload"]["task"]["assigned_to"] is not None
+
+
+def test_ws_task_event_filtered_by_capability(setup):
+    # Bob has tier:opus but not vision. Create two open-pool tasks:
+    # one needs tier:opus (Bob should receive), one needs vision (Bob should not).
+    # Use a follow-up message to anchor that Bob's next event after the matching
+    # task is the message, proving the non-matching task was filtered out.
+    app, ((key_a, _), (key_b, agent_b)) = setup
+    with TestClient(app) as client:
+        # Give Bob a capability profile.
+        r = client.patch(
+            "/api/v1/agents/me",
+            headers=_bearer(key_b),
+            json={"capabilities": ["tier:opus"]},
+        )
+        assert r.status_code == 200
+
+        with client.websocket_connect(
+            "/api/v1/ws", headers=_bearer(key_b)
+        ) as ws_b:
+            ws_b.receive_json()  # self-ready
+
+            # Non-matching task — Bob must NOT receive.
+            r = client.post(
+                "/api/v1/tasks",
+                headers=_bearer(key_a),
+                json={"title": "needs vision", "required_all": ["vision"]},
+            )
+            assert r.status_code == 201
+
+            # Matching task — Bob must receive.
+            r = client.post(
+                "/api/v1/tasks",
+                headers=_bearer(key_a),
+                json={"title": "needs opus", "required_all": ["tier:opus"]},
+            )
+            assert r.status_code == 201
+
+            # Anchor: follow up with a direct message to Bob.
+            r = client.post(
+                "/api/v1/messages",
+                headers=_bearer(key_a),
+                json={"to_agent": agent_b.id, "content": "ping"},
+            )
+            assert r.status_code == 201
+
+            ev1 = ws_b.receive_json()
+            assert ev1["type"] == "task_event"
+            assert ev1["payload"]["task"]["title"] == "needs opus"
+
+            ev2 = ws_b.receive_json()
+            assert ev2["type"] == "message"
+            assert ev2["payload"]["message"]["content"] == "ping"

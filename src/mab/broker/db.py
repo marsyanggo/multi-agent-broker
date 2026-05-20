@@ -7,6 +7,7 @@ from typing import Any
 
 import aiosqlite
 
+from mab.shared.capabilities import matches_capabilities
 from mab.shared.models import (
     Agent,
     AgentStatus,
@@ -60,6 +61,8 @@ CREATE TABLE IF NOT EXISTS tasks (
     priority TEXT NOT NULL DEFAULT 'normal',
     result TEXT,
     notes TEXT NOT NULL DEFAULT '[]',
+    required_all TEXT NOT NULL DEFAULT '[]',
+    required_any TEXT NOT NULL DEFAULT '[]',
     created_at TEXT NOT NULL,
     updated_at TEXT NOT NULL,
     completed_at TEXT
@@ -116,6 +119,8 @@ def _row_to_task(row: aiosqlite.Row) -> Task:
         priority=row["priority"],
         result=row["result"],
         notes=json.loads(row["notes"]),
+        required_all=json.loads(row["required_all"]),
+        required_any=json.loads(row["required_any"]),
         created_at=_parse_dt(row["created_at"]),
         updated_at=_parse_dt(row["updated_at"]),
         completed_at=_parse_dt(row["completed_at"]),
@@ -148,7 +153,20 @@ class Database:
 
     async def init_schema(self) -> None:
         await self.conn.executescript(SCHEMA)
+        await self._migrate()
         await self.conn.commit()
+
+    async def _migrate(self) -> None:
+        async with self.conn.execute("PRAGMA table_info(tasks)") as cur:
+            cols = {row["name"] for row in await cur.fetchall()}
+        if "required_all" not in cols:
+            await self.conn.execute(
+                "ALTER TABLE tasks ADD COLUMN required_all TEXT NOT NULL DEFAULT '[]'"
+            )
+        if "required_any" not in cols:
+            await self.conn.execute(
+                "ALTER TABLE tasks ADD COLUMN required_any TEXT NOT NULL DEFAULT '[]'"
+            )
 
     # --- Agents ---
 
@@ -253,6 +271,30 @@ class Database:
         await self.conn.execute("DELETE FROM agents WHERE id = ?", (agent_id,))
         await self.conn.commit()
 
+    async def update_agent_capabilities(
+        self, agent_id: str, capabilities: list[str]
+    ) -> Agent | None:
+        await self.conn.execute(
+            "UPDATE agents SET capabilities = ? WHERE id = ?",
+            (json.dumps(capabilities), agent_id),
+        )
+        await self.conn.commit()
+        return await self.get_agent(agent_id)
+
+    async def find_matching_agents(
+        self,
+        *,
+        required_all: list[str],
+        required_any: list[str],
+        status: AgentStatus | None = None,
+    ) -> list[Agent]:
+        agents = await self.list_agents(status=status)
+        return [
+            a
+            for a in agents
+            if matches_capabilities(a.capabilities, required_all, required_any)
+        ]
+
     # --- Messages ---
 
     async def create_message(
@@ -342,16 +384,21 @@ class Database:
         created_by: str,
         assigned_to: str | None = None,
         priority: TaskPriority = "normal",
+        required_all: list[str] | None = None,
+        required_any: list[str] | None = None,
     ) -> Task:
         task_id = short_uuid()
         now = utc_now()
         status: TaskStatus = "assigned" if assigned_to else "pending"
+        required_all = required_all or []
+        required_any = required_any or []
         await self.conn.execute(
             """
             INSERT INTO tasks
                 (id, title, description, created_by, assigned_to, status,
-                 priority, notes, created_at, updated_at)
-            VALUES (?, ?, ?, ?, ?, ?, ?, '[]', ?, ?)
+                 priority, notes, required_all, required_any,
+                 created_at, updated_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?, '[]', ?, ?, ?, ?)
             """,
             (
                 task_id,
@@ -361,6 +408,8 @@ class Database:
                 assigned_to,
                 status,
                 priority,
+                json.dumps(required_all),
+                json.dumps(required_any),
                 _iso(now),
                 _iso(now),
             ),
@@ -374,6 +423,8 @@ class Database:
             assigned_to=assigned_to,
             status=status,
             priority=priority,
+            required_all=required_all,
+            required_any=required_any,
             created_at=now,
             updated_at=now,
         )

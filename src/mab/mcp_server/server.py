@@ -12,6 +12,7 @@ from typing import Any, Awaitable, Callable
 from mcp.server.fastmcp import FastMCP
 
 from mab.mcp_server.broker_client import BrokerClient
+from mab.shared.capabilities import derive_capabilities_from_model
 
 logging.basicConfig(
     level=logging.INFO,
@@ -131,13 +132,22 @@ async def create_task(
     description: str = "",
     assigned_to: str | None = None,
     priority: str = "normal",
+    required_all: list[str] | None = None,
+    required_any: list[str] | None = None,
 ) -> str:
-    """Create a task. assigned_to=null leaves it open. priority: low, normal, high, urgent."""
+    """Create a task. assigned_to=null leaves it open. priority: low, normal, high, urgent.
+
+    Capability routing: required_all = tags every claimer must have (AND).
+    required_any = at least one of these tags required (OR). Both default to empty
+    (any agent can claim). Common tags: model:<exact>, family:claude, tier:opus,
+    provider:anthropic, plus free-form flags like vision, audio."""
     task = await _client_or_raise().create_task(
         title=title,
         description=description,
         assigned_to=assigned_to,
         priority=priority,  # type: ignore[arg-type]
+        required_all=required_all,
+        required_any=required_any,
     )
     return _to_json(task.model_dump(mode="json"))
 
@@ -192,10 +202,30 @@ async def list_tasks(
     return _to_json([t.model_dump(mode="json") for t in tasks])
 
 
-async def _serve(broker_url: str, api_key: str) -> None:
+async def _serve(
+    broker_url: str,
+    api_key: str,
+    *,
+    model: str | None = None,
+    extra_capabilities: list[str] | None = None,
+) -> None:
     global _client
     _client = BrokerClient(broker_url=broker_url, api_key=api_key)
     await _client.start()
+
+    if model or extra_capabilities:
+        caps: list[str] = []
+        if model:
+            caps.extend(derive_capabilities_from_model(model))
+        if extra_capabilities:
+            caps.extend(extra_capabilities)
+        # Dedup preserving order.
+        seen: set[str] = set()
+        deduped = [c for c in caps if not (c in seen or seen.add(c))]
+        updated = await _client.update_capabilities(deduped)
+        _client.agent = updated
+        log.info("capabilities updated: %s", deduped)
+
     log.info(
         "mab-agent connected: name=%s id=%s",
         _client.agent.name if _client.agent else "?",
@@ -214,6 +244,16 @@ def main() -> None:
         default=os.environ.get("MAB_BROKER_URL", "http://localhost:8420"),
     )
     parser.add_argument("--api-key", default=os.environ.get("MAB_API_KEY"))
+    parser.add_argument(
+        "--model",
+        default=os.environ.get("MAB_MODEL"),
+        help="Model identifier (e.g. claude-opus-4-7). Auto-derives capability tags.",
+    )
+    parser.add_argument(
+        "--capabilities",
+        default=os.environ.get("MAB_CAPABILITIES", ""),
+        help="Extra capability tags, comma-separated. Combined with --model derivations.",
+    )
     args = parser.parse_args()
 
     if not args.api_key:
@@ -222,4 +262,12 @@ def main() -> None:
         )
         sys.exit(2)
 
-    asyncio.run(_serve(args.broker_url, args.api_key))
+    extra_caps = [c.strip() for c in args.capabilities.split(",") if c.strip()]
+    asyncio.run(
+        _serve(
+            args.broker_url,
+            args.api_key,
+            model=args.model,
+            extra_capabilities=extra_caps or None,
+        )
+    )

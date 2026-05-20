@@ -187,6 +187,13 @@ class BrokerClient:
         r.raise_for_status()
         return Agent.model_validate(r.json())
 
+    async def update_capabilities(self, capabilities: list[str]) -> Agent:
+        r = await self._http.patch(
+            "/api/v1/agents/me", json={"capabilities": capabilities}
+        )
+        r.raise_for_status()
+        return Agent.model_validate(r.json())
+
     async def send_message(
         self,
         *,
@@ -222,13 +229,19 @@ class BrokerClient:
         description: str = "",
         assigned_to: str | None = None,
         priority: TaskPriority = "normal",
+        required_all: list[str] | None = None,
+        required_any: list[str] | None = None,
     ) -> Task:
-        body = {
+        body: dict[str, Any] = {
             "title": title,
             "description": description,
             "assigned_to": assigned_to,
             "priority": priority,
         }
+        if required_all:
+            body["required_all"] = required_all
+        if required_any:
+            body["required_any"] = required_any
         r = await self._http.post("/api/v1/tasks", json=body)
         r.raise_for_status()
         return Task.model_validate(r.json())

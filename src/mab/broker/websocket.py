@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import asyncio
 import logging
+from collections.abc import Iterable
+from typing import Any
 
 from fastapi import APIRouter, Request, WebSocket, WebSocketDisconnect
 
@@ -73,12 +75,18 @@ class WebSocketHub:
             await self.db.mark_delivered(message.id)
         return ok
 
-    async def emit_task_event(self, event: TaskEventName, task: Task) -> None:
+    async def emit_task_event(
+        self,
+        event: TaskEventName,
+        task: Task,
+        *,
+        extra_targets: Iterable[str] = (),
+    ) -> None:
         env = TaskEventEnvelope(
             id=short_uuid(),
             payload=TaskEventPayload(event=event, task=task),
         )
-        targets: set[str] = {task.created_by}
+        targets: set[str] = {task.created_by, *extra_targets}
         if task.assigned_to:
             targets.add(task.assigned_to)
         for agent_id in targets:
