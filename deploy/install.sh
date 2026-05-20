@@ -114,9 +114,10 @@ cat <<EOF
   Health:    curl http://127.0.0.1:${PORT}/health
   Listen on: http://${LAN_IP}:${PORT}  (LAN-accessible)
 
-To register an agent and print its API key:
+To register an agent and print its API key (MAB_DB_PATH must match the unit so
+the key lands in the same SQLite file the broker reads):
 
-  $REPO_ROOT/.venv/bin/mab-broker gen-key --name <agent-name>
+  MAB_DB_PATH=$DATA_DIR/db.sqlite $REPO_ROOT/.venv/bin/mab-broker gen-key --name <agent-name>
 
 On the agent machine, add to its .mcp.json:
 

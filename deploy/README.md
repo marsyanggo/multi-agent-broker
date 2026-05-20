@@ -27,6 +27,17 @@ What the script does:
 
 The script is idempotent — re-run it after `git pull` to apply updates without breakage.
 
+## Register an agent
+
+The installer sets a non-default `MAB_DB_PATH` for the broker (so data sits under XDG, not `~/.multi-agent-broker/`). When you run `gen-key` from the shell, you **must** pass the same env var, or the key is written to a different SQLite file and the broker will reject every connection with `invalid api key`:
+
+```bash
+MAB_DB_PATH=$HOME/.local/share/multi-agent-broker/db.sqlite \
+  /path/to/multi-agent-broker/.venv/bin/mab-broker gen-key --name <agent-name>
+```
+
+The `install.sh` finish message prints a ready-to-paste version with the correct paths filled in.
+
 ## Day-to-day ops
 
 ```bash
