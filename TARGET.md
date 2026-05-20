@@ -76,8 +76,8 @@ Phase 1 鎖定最小可運行核心：**agent + message + task**。先把兩台 
 - [x] **D3.** `deploy/README.md` — 安裝 / ops / 更新 / 移除 文件
 - [x] **D4a.** 在 192.168.1.212 跑 `./deploy/install.sh` 成功，broker 起來
 - [x] **D4b.** `gen-key --name claude-mac` 拿 API key，`claude mcp add -s user` 加進 `~/.claude.json`
-- [ ] **D4c.** ⚠️ 重啟 Claude Code 後驗證 `list_agents` 看得到 `claude-mac` online（**load 後第一件事**）
-- [ ] **D4d.** Cross-machine demo：Mac 端 Claude Code `send_message` / `create_task` 跑通對 broker 的完整 lifecycle
+- [x] **D4c.** 重啟 Claude Code 後驗證 `list_agents` 看得到 `claude-mac` online
+- [x] **D4d.** Cross-machine demo：Mac 端 Claude Code `send_message` / `create_task` 跑通對 broker 的完整 lifecycle
 - [x] **D5.** 修 `install.sh` / `deploy/README.md` — gen-key 範例帶上 `MAB_DB_PATH`，避免 broker 跟 gen-key 寫到不同 DB
 
 ---

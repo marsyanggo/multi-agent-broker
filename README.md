@@ -1,40 +1,46 @@
 # multi-agent-broker
 
-**A LLM-agnostic broker that lets agents on different machines — running different LLMs — collaborate over a single shared message bus.**
+**A LLM-agnostic broker that lets agents on different machines — running different LLMs — collaborate over a single shared message bus, with capability-aware task routing built in.**
 
-Spin up the broker on any reachable host, register one API key per agent, and Claude Code / Gemini CLI instances on separate boxes can list each other, exchange direct messages, and pass tasks back and forth. Phase 1 ships Claude Code integration via MCP stdio; REST + WebSocket are open for any other language or LLM framework to plug in.
+Spin up the broker on any reachable host, register one API key per agent, and Claude Code / Gemini CLI instances on separate boxes can list each other, exchange direct messages, and pass tasks back and forth. Tasks can require specific model capabilities (e.g. `tier:opus`, `family:claude`, `vision`) so high-stakes work only goes to agents that can handle it. Claude Code integration ships today via MCP stdio; REST + WebSocket are open for any other language or LLM framework to plug in.
 
-> **Status:** Phase 1 complete — agent + message + task primitives, MCP server tested end-to-end with two `mab-agent` subprocesses driving real broker traffic. Channels / shared context / Python SDK adapters land in Phase 2-3.
+> **Status:** Phase 1 (core) + Phase 1.5 (deployment) + Phase 2.1 (capability routing) complete. 68 tests, real-subprocess end-to-end demos, one-shot installer for Linux PCs, and a live cross-machine setup running on Linux (broker) ↔ macOS (Claude Code via MCP). Channels / shared context / Python SDK adapters land in Phase 2-3.
 
 ---
 
 ## What's in the box
 
-- **Central broker** — FastAPI + SQLite (WAL) + WebSocket Hub; one binary, zero ops
-- **MCP stdio agent** — `mab-agent` plugs into Claude Code via `.mcp.json`; 9 tools cover agent discovery, direct messaging, task lifecycle
+- **Central broker** — FastAPI + SQLite (WAL) + WebSocket Hub; one binary, zero external dependencies
+- **MCP stdio agent** — `mab-agent` plugs into Claude Code via `.mcp.json` or `claude mcp add`; 9 tools cover agent discovery, direct messaging, full task lifecycle
+- **Capability-based routing** — tasks carry `required_all` / `required_any` tag sets; broker filters WS broadcast to matching online agents and rejects mismatched claims (`403`) or directed assignments (`400`)
+- **Model-aware agents** — `mab-agent --model claude-opus-4-7` auto-derives `model:` / `family:` / `tier:` / `provider:` tags so capabilities track the runtime model identity
 - **Push-aware tool responses** — every MCP tool reply embeds `_pending_messages` / `_pending_task_events` counts so Claude Code (which cannot be push-interrupted) is nudged to drain its queue on the next tool call
 - **Atomic task claim** — `UPDATE ... WHERE status='pending' RETURNING` guarantees single-winner semantics under concurrent claims
 - **Offline message backfill** — messages addressed to an offline agent persist for 7 days; the agent receives them on next reconnect
-- **Auto-reconnecting WS client** — exponential backoff (1→2→4…60s), self-heals across broker restarts
+- **Auto-reconnecting WS client** — exponential backoff (1→2→4…60s), application-layer text heartbeat keeps `last_heartbeat` fresh on the broker
+- **One-shot deployment** — `deploy/install.sh` sets up uv venv + systemd user service in a single command; broker runs persistently without ongoing sudo
 
 ## Quickstart
 
-### Install
+### Install (broker host)
 
 ```bash
-git clone <repo>
+git clone https://github.com/marsyanggo/multi-agent-broker
 cd multi-agent-broker
 uv sync
+uv run mab-broker serve         # listens on 0.0.0.0:8420
 ```
 
-### 1. Start the broker (one machine)
+For a production-style install with systemd user service (Linux), use the one-shot installer instead:
 
 ```bash
-uv run mab-broker serve
-# → listens on 0.0.0.0:8420
+./deploy/install.sh             # one sudo step for loginctl enable-linger; rest non-sudo
+systemctl --user status mab-broker
 ```
 
-### 2. Generate an API key per agent
+See [`deploy/README.md`](deploy/README.md) for the full deploy / update / remove flow.
+
+### Generate an API key per agent
 
 ```bash
 uv run mab-broker gen-key --name claude-laptop
@@ -43,51 +49,139 @@ uv run mab-broker gen-key --name claude-laptop
 #   mab-ak-XXXXXXXXXXXXXXXX
 ```
 
+You can pre-seed capabilities at registration:
+
+```bash
+uv run mab-broker gen-key --name worker-linux \
+  --capabilities tier:sonnet,family:claude,vision
+```
+
 Name conflict? Add `--auto-suffix` to auto-increment (`claude-laptop` → `claude-laptop-2`).
 
-### 3. Wire up Claude Code
+> When the broker is installed via `deploy/install.sh`, its data dir is moved off `$HOME`. Re-export the same `MAB_DB_PATH` when running `gen-key` from the same machine, or you'll write keys to a different SQLite file than the broker reads:
+> ```bash
+> MAB_DB_PATH=$XDG_DATA_HOME/multi-agent-broker/db.sqlite \
+>   uv run mab-broker gen-key --name claude-laptop
+> ```
 
-Add to the agent machine's `.mcp.json`:
+### Wire up Claude Code
 
-```json
-{
-  "mcpServers": {
-    "mab": {
-      "command": "uv",
-      "args": ["run", "mab-agent",
-               "--broker-url", "http://192.168.1.100:8420",
-               "--api-key", "mab-ak-XXXXXXXXXXXXXXXX"]
-    }
-  }
-}
+```bash
+claude mcp add -s user mab \
+  /path/to/mab-agent \
+  --broker-url http://192.168.1.100:8420 \
+  --api-key mab-ak-XXXXXXXXXXXXXXXX \
+  --model claude-opus-4-7
+```
+
+`--model claude-opus-4-7` auto-derives capability tags. To override or extend:
+
+```bash
+mab-agent --broker-url ... --api-key ... \
+  --model claude-opus-4-7 \
+  --capabilities vision,code-review     # extra tags merged with model derivation
 ```
 
 Restart Claude Code. You'll see 9 tools: `list_agents`, `get_agent_info`, `report_status`, `send_message`, `get_messages`, `create_task`, `claim_task`, `update_task`, `list_tasks`.
 
-### 4. Test it
+### Try it out
 
-In one Claude Code session: ask it to call `create_task(title="say hi back")`. In another session: ask it to `list_tasks(status="pending")` → `claim_task` → `update_task(status="completed")`. The two sides should see each other's events propagated via WebSocket within sub-second latency.
+```text
+You:    Use the mab tools to create a task that needs tier:opus, then claim it.
+Claude: [calls create_task(title="...", required_all=["tier:opus"])]
+        [calls claim_task(task_id="...")]   # succeeds because this agent has tier:opus
+        [calls update_task(status="completed", result="...")]
+```
+
+If a non-opus agent tries to claim the same task, the broker returns `403` and the task stays pending.
 
 ---
 
 ## Architecture
 
 ```
-┌────────────────────────────────────────────┐
-│ Central Broker (FastAPI + SQLite + WS Hub) │
-│  REST  /api/v1/{agents|messages|tasks}     │
-│  WS    /api/v1/ws  (push channel)          │
-└──────┬─────────────────────────────┬───────┘
-       │                             │
-   WS (push)                    REST (pull)
-       │                             │
-┌──────┴───────┐               ┌─────┴────────┐
-│  mab-agent   │ ← stdio ──→  │ Claude Code  │
-│  (per-host)  │   MCP         │ (per-host)   │
-└──────────────┘               └──────────────┘
+                  ┌────────────────────────────────────────────┐
+                  │ Central Broker (FastAPI + SQLite + WS Hub) │
+                  │  REST  /api/v1/{agents|messages|tasks}     │
+                  │  WS    /api/v1/ws  (push channel)          │
+                  │  Capability matcher filters task broadcast │
+                  └──┬──────────────────────────────────────┬──┘
+                     │                                      │
+                 WS (push)                              WS (push)
+            REST (pull/control)                    REST (pull/control)
+                     │                                      │
+              ┌──────┴──────┐                        ┌──────┴──────┐
+              │  mab-agent  │ ←—— stdio MCP ——→ Claude Code (Mac)
+              │ (per-host)  │                        Gemini CLI / Ollama
+              └─────────────┘                        (Phase 3 adapters)
 ```
 
-Full Phase 1-5 design lives in [`architcture.md`](architcture.md).
+### Message + task flow
+
+```
+Claude Code → mab-agent → REST POST /api/v1/tasks (required_all=[tier:opus])
+                          │
+            broker stores task, computes online agents matching capability
+                          │
+            WS push task_event:created → ONLY agents with tier:opus
+                          │
+            One of them: POST /api/v1/tasks/{id}/claim
+                          │
+            Broker validates claimer.capabilities, then atomic UPDATE
+                          │
+            WS push task_event:claimed → creator + assignee
+                          │
+            Assignee: PATCH /api/v1/tasks/{id} { status: completed, result, note }
+                          │
+            WS push task_event:completed → creator + assignee
+```
+
+Full Phase 1-5 long-form design lives in [`architcture.md`](architcture.md).
+
+---
+
+## Capability tags
+
+Tags follow a `prefix:value` convention (with bare tags also allowed). The matcher does plain string equality on tags; no glob / regex.
+
+| Prefix | Meaning | Examples |
+|--------|---------|----------|
+| `model:` | Exact model identifier | `model:claude-opus-4-7`, `model:gpt-4o`, `model:llama-3.3-70b` |
+| `family:` | Vendor / brand family | `family:claude`, `family:openai`, `family:google`, `family:meta` |
+| `tier:` | Capability tier within a family | `tier:opus`, `tier:sonnet`, `tier:haiku`, `tier:flash`, `tier:pro` |
+| `provider:` | API provider | `provider:anthropic`, `provider:openai`, `provider:google` |
+| (bare) | Free-form capability flag | `vision`, `audio`, `code-review`, `cn-locale` |
+
+`mab-agent --model X` auto-derives `model:`, `family:`, `tier:`, `provider:` for known model families (claude, gpt, gemini, llama, mistral). Unknown model strings only get `model:X` — anything richer should be passed via `--capabilities`.
+
+### Task match semantics
+
+A task carries two optional tag lists, both AND-of-AND-then-AND-of-OR:
+
+```python
+create_task(
+    title="...",
+    required_all=["tier:opus"],            # claimer must have ALL of these
+    required_any=["vision", "audio"],      # claimer must have AT LEAST ONE of these
+)
+```
+
+| Agent tags | `required_all=[tier:opus]`, `required_any=[vision, audio]` |
+|------------|-------------------------------------------------------------|
+| `[tier:opus, vision]` | ✓ |
+| `[tier:opus, audio]` | ✓ |
+| `[tier:opus]` | ✗ (fails `required_any`) |
+| `[tier:sonnet, vision]` | ✗ (fails `required_all`) |
+| `[]` (no caps) | ✗ unless both fields are empty |
+
+Empty `required_all` + empty `required_any` ⇒ any agent matches (Phase 1 backward-compat behaviour).
+
+### Routing behaviour
+
+- **Filter broadcast** — broker only sends `task_event:created` over WS to *matching* online agents. Non-matchers never know the task exists via push.
+- **Authoritative claim** — even if an agent learns of a task via `list_tasks`, claiming it requires capability match; otherwise `403`.
+- **Directed assignment** — `create_task(assigned_to=...)` with capability requirements validates the assignee at creation; `400` if mismatched.
+- **Zero matches** — task is still created (status `pending`); later-connecting agents that match can pick it up via `list_tasks`.
 
 ---
 
@@ -96,14 +190,18 @@ Full Phase 1-5 design lives in [`architcture.md`](architcture.md).
 Env vars (prefix `MAB_`):
 
 | Var | Default | Effect |
-|---|---|---|
+|-----|---------|--------|
 | `MAB_HOST` | `0.0.0.0` | Broker bind host |
 | `MAB_PORT` | `8420` | Broker port |
 | `MAB_DB_PATH` | `~/.multi-agent-broker/db.sqlite` | SQLite location |
 | `MAB_MESSAGE_TTL_DAYS` | `7` | Undelivered message retention |
-| `MAB_HEARTBEAT_INTERVAL_SECONDS` | `30` | WS keepalive |
-| `MAB_BROKER_URL` | `http://localhost:8420` | (agent side) broker to dial |
-| `MAB_API_KEY` | — required — | (agent side) auth token |
+| `MAB_HEARTBEAT_INTERVAL_SECONDS` | `30` | WS keepalive + app heartbeat |
+| `MAB_BROKER_URL` | `http://localhost:8420` | (agent) broker to dial |
+| `MAB_API_KEY` | — required — | (agent) auth token |
+| `MAB_MODEL` | — | (agent) model identifier for capability derivation |
+| `MAB_CAPABILITIES` | — | (agent) extra capability tags, comma-separated |
+
+CLI flags on `mab-agent` mirror the env vars; CLI takes precedence.
 
 ---
 
@@ -111,24 +209,30 @@ Env vars (prefix `MAB_`):
 
 ```bash
 uv run pytest
-# 51 tests, ~25s — includes real-subprocess end-to-end demo
+# 68 tests, ~25s — includes real-subprocess end-to-end demo
 ```
 
 Test layout:
-- `tests/test_db.py` — SQLite CRUD + atomic claim + TTL
-- `tests/test_auth.py` — API key hashing + Bearer validation
-- `tests/test_routes.py` — REST routes against in-process FastAPI
-- `tests/test_websocket.py` — Hub routing, backfill, agent/task events
-- `tests/test_broker_client.py` — `BrokerClient` against live uvicorn
-- `tests/test_mcp_server.py` — MCP tool wiring + pending-count interceptor
-- `tests/test_e2e_demo.py` — `mab-broker serve` + 2× `mab-agent` via MCP stdio
+
+| File | Coverage |
+|------|----------|
+| `tests/test_db.py` | SQLite CRUD, atomic claim, TTL cleanup, capability migration |
+| `tests/test_auth.py` | API key hashing, Bearer validation, name conflict / auto-suffix |
+| `tests/test_capabilities.py` | Capability matcher (AND-of-all + AND-of-any), model→tag derivation |
+| `tests/test_routes.py` | REST routes against in-process FastAPI, including capability validation |
+| `tests/test_websocket.py` | Hub routing, backfill, agent/task events, capability filter broadcast |
+| `tests/test_broker_client.py` | `BrokerClient` against a live uvicorn broker (including app heartbeat) |
+| `tests/test_mcp_server.py` | MCP tool wiring + `_pending_messages` interceptor |
+| `tests/test_e2e_demo.py` | `mab-broker serve` + 2× `mab-agent` via MCP stdio (4 demo scenarios) |
 
 ---
 
 ## Roadmap
 
 - **Phase 1** ✅ — broker + MCP agent (agent / message / task)
-- **Phase 2** — channels + shared code/context + broadcast
+- **Phase 1.5** ✅ — one-shot deployment (uv + systemd user service)
+- **Phase 2.1** ✅ — capability-based task routing (this release)
+- **Phase 2 (remaining)** — channels + shared code/context + broadcast
 - **Phase 3** — Python SDK + OpenAI / Ollama / LangChain adapters
 - **Phase 4** — TLS + JWT + IP allowlist for public-internet deployment
 - **Phase 5** — Web dashboard + message full-text search
