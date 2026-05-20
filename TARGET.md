@@ -67,7 +67,18 @@ Phase 1 鎖定最小可運行核心：**agent + message + task**。先把兩台 
 
 ---
 
-## 後續 Phase（暫定，待 Phase 1 完成後規劃）
+## Phase 1.5 — Deployment
+
+目標：在另一台 Linux PC 上一鍵跑起來。Native uv + systemd user service，broker 端用 sudo 一次（`loginctl enable-linger`），之後 day-to-day 全部不用 sudo。
+
+- [x] **D1.** `deploy/install.sh` — uv 檢查 → uv sync → systemd user unit → enable + start → /health 等待
+- [x] **D2.** `deploy/uninstall.sh` — 拆服務 unit，保留 DB
+- [x] **D3.** `deploy/README.md` — 安裝 / ops / 更新 / 移除 文件
+- [ ] **D4.** 實際部署 + 兩台機器 smoke test（target Linux PC ↔ 本機 Claude Code）
+
+---
+
+## 後續 Phase（暫定）
 
 - **Phase 2**：Channels + shared context + broadcast
 - **Phase 3**：Python SDK + OpenAI / Ollama / LangChain adapters
