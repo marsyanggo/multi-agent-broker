@@ -4,20 +4,22 @@
 
 Spin up the broker on any reachable host, register one API key per agent, and Claude Code / Gemini CLI instances on separate boxes can list each other, exchange direct messages, and pass tasks back and forth. Tasks can require specific model capabilities (e.g. `tier:opus`, `family:claude`, `vision`) so high-stakes work only goes to agents that can handle it. Claude Code integration ships today via MCP stdio; REST + WebSocket are open for any other language or LLM framework to plug in.
 
-> **Status:** Phase 1 (core) + Phase 1.5 (deployment) + Phase 2.1 (capability routing) complete. 68 tests, real-subprocess end-to-end demos, one-shot installer for Linux PCs, and a live cross-machine setup running on Linux (broker) ↔ macOS (Claude Code via MCP). Channels / shared context / Python SDK adapters land in Phase 2-3.
+> **Status:** Phase 1 (core) + Phase 1.5 (deployment) + Phase 2.1 (capability routing) + Phase 2.2 (task delete + observability) complete. 72 tests, real-subprocess end-to-end demos, one-shot installer for Linux PCs, live cross-machine setup on Linux (broker) ↔ macOS (Claude Code via MCP), and live multi-agent filter-broadcast demo (claude-mac opus + worker-linux sonnet) — tasks with `required_all=[tier:opus]` reach claude-mac but never reach worker-linux, verified end-to-end. Channels / shared context / Python SDK adapters land in Phase 2-3.
 
 ---
 
 ## What's in the box
 
 - **Central broker** — FastAPI + SQLite (WAL) + WebSocket Hub; one binary, zero external dependencies
-- **MCP stdio agent** — `mab-agent` plugs into Claude Code via `.mcp.json` or `claude mcp add`; 9 tools cover agent discovery, direct messaging, full task lifecycle
+- **MCP stdio agent** — `mab-agent` plugs into Claude Code via `.mcp.json` or `claude mcp add`; **10 tools** cover agent discovery, direct messaging, full task lifecycle (including `delete_task`)
 - **Capability-based routing** — tasks carry `required_all` / `required_any` tag sets; broker filters WS broadcast to matching online agents and rejects mismatched claims (`403`) or directed assignments (`400`)
 - **Model-aware agents** — `mab-agent --model claude-opus-4-7` auto-derives `model:` / `family:` / `tier:` / `provider:` tags so capabilities track the runtime model identity
 - **Push-aware tool responses** — every MCP tool reply embeds `_pending_messages` / `_pending_task_events` counts so Claude Code (which cannot be push-interrupted) is nudged to drain its queue on the next tool call
 - **Atomic task claim** — `UPDATE ... WHERE status='pending' RETURNING` guarantees single-winner semantics under concurrent claims
+- **Task delete with `task_event:deleted`** — creator or current assignee can drop a task in any state; broker auto-clears the assignee's `current_task` and broadcasts the deletion
 - **Offline message backfill** — messages addressed to an offline agent persist for 7 days; the agent receives them on next reconnect
 - **Auto-reconnecting WS client** — exponential backoff (1→2→4…60s), application-layer text heartbeat keeps `last_heartbeat` fresh on the broker
+- **Observability tool** — `tools/watch.py` connects to the broker as a non-MCP agent and prints every received WS event to stdout; the easiest way to verify filter broadcast or chase routing bugs from a third machine
 - **One-shot deployment** — `deploy/install.sh` sets up uv venv + systemd user service in a single command; broker runs persistently without ongoing sudo
 
 ## Quickstart
@@ -82,7 +84,7 @@ mab-agent --broker-url ... --api-key ... \
   --capabilities vision,code-review     # extra tags merged with model derivation
 ```
 
-Restart Claude Code. You'll see 9 tools: `list_agents`, `get_agent_info`, `report_status`, `send_message`, `get_messages`, `create_task`, `claim_task`, `update_task`, `list_tasks`.
+Restart Claude Code. You'll see 10 tools: `list_agents`, `get_agent_info`, `report_status`, `send_message`, `get_messages`, `create_task`, `claim_task`, `update_task`, `delete_task`, `list_tasks`.
 
 ### Try it out
 
@@ -94,6 +96,20 @@ Claude: [calls create_task(title="...", required_all=["tier:opus"])]
 ```
 
 If a non-opus agent tries to claim the same task, the broker returns `403` and the task stays pending.
+
+### Observing routing live
+
+If you want to see *which* events reach a given agent without bolting it into Claude Code, run `tools/watch.py` on the same host as that agent's API key:
+
+```bash
+python tools/watch.py \
+  --broker-url http://192.168.1.100:8420 \
+  --api-key mab-ak-XXXX
+# stderr: [watch] connected as worker-linux (id=...) caps=[...]
+# stdout: one JSON line per received message / task_event
+```
+
+Then create tasks from elsewhere with different `required_all` sets — non-matching events simply never appear in the watcher's output, which is the cleanest live proof that filter broadcast works. (Used to validate this codebase across a real Linux + macOS setup.)
 
 ---
 
@@ -209,7 +225,7 @@ CLI flags on `mab-agent` mirror the env vars; CLI takes precedence.
 
 ```bash
 uv run pytest
-# 68 tests, ~25s — includes real-subprocess end-to-end demo
+# 72 tests, ~25s — includes real-subprocess end-to-end demo
 ```
 
 Test layout:
@@ -219,10 +235,10 @@ Test layout:
 | `tests/test_db.py` | SQLite CRUD, atomic claim, TTL cleanup, capability migration |
 | `tests/test_auth.py` | API key hashing, Bearer validation, name conflict / auto-suffix |
 | `tests/test_capabilities.py` | Capability matcher (AND-of-all + AND-of-any), model→tag derivation |
-| `tests/test_routes.py` | REST routes against in-process FastAPI, including capability validation |
+| `tests/test_routes.py` | REST routes against in-process FastAPI, including capability validation + task delete (creator / assignee / non-owner / 404) |
 | `tests/test_websocket.py` | Hub routing, backfill, agent/task events, capability filter broadcast |
 | `tests/test_broker_client.py` | `BrokerClient` against a live uvicorn broker (including app heartbeat) |
-| `tests/test_mcp_server.py` | MCP tool wiring + `_pending_messages` interceptor |
+| `tests/test_mcp_server.py` | MCP tool wiring (10 tools) + `_pending_messages` interceptor |
 | `tests/test_e2e_demo.py` | `mab-broker serve` + 2× `mab-agent` via MCP stdio (4 demo scenarios) |
 
 ---
@@ -231,7 +247,8 @@ Test layout:
 
 - **Phase 1** ✅ — broker + MCP agent (agent / message / task)
 - **Phase 1.5** ✅ — one-shot deployment (uv + systemd user service)
-- **Phase 2.1** ✅ — capability-based task routing (this release)
+- **Phase 2.1** ✅ — capability-based task routing
+- **Phase 2.2** ✅ — task delete + `tools/watch.py` observability + live multi-agent cross-machine verification (this release)
 - **Phase 2 (remaining)** — channels + shared code/context + broadcast
 - **Phase 3** — Python SDK + OpenAI / Ollama / LangChain adapters
 - **Phase 4** — TLS + JWT + IP allowlist for public-internet deployment

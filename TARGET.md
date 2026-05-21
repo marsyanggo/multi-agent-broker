@@ -114,11 +114,14 @@ Phase 1 鎖定最小可運行核心：**agent + message + task**。先把兩台 
 
 ---
 
-## Phase 2.2 — Task delete + observability
+## Phase 2.2 — Task delete + observability + live verification
 
 - [x] **E1.** `DELETE /api/v1/tasks/{id}` — creator 或 assignee 可刪、任何狀態、自動清 `current_task`、廣播 `task_event:deleted`
 - [x] **E2.** `tools/watch.py` — 連 broker 印 received messages / task events，用來看 capability filter broadcast 真的有過濾
 - [x] **E3.** `task_event:deleted` 加進 protocol discriminator + MCP `delete_task` tool
+- [x] **E4.** 升級 192.168.1.212 broker 到 Phase 2.1 + 2.2（含 schema migration ALTER ADD COLUMN）+ live-verify `PATCH /agents/me`、`required_all` 存取、claim 驗 cap（403）、heartbeat 真實更新
+- [x] **E5.** Cross-machine multi-agent filter broadcast demo — claude-mac (opus) + worker-linux (sonnet) 兩 agent，3 個 case 驗證 broker 真的只 push 給匹配的 agent
+- [x] **E6.** README 更新到含 Phase 2.2（DELETE / watch.py / 10 tools / 72 tests / cross-machine 已驗）
 
 ---
 
