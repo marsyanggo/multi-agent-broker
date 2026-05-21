@@ -56,6 +56,8 @@ async def create_task(
         required_all=body.required_all,
         required_any=body.required_any,
     )
+    if task.assigned_to:
+        await db.set_current_task(task.assigned_to, task.id)
     extra_targets: list[str] = []
     if task.assigned_to is None:
         matched = await db.find_matching_agents(

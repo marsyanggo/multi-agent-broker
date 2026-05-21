@@ -38,6 +38,11 @@ class Agent(BaseModel):
     last_heartbeat: datetime
 
 
+class AgentSnapshot(Agent):
+    last_heartbeat_age_seconds: float
+    is_stale: bool
+
+
 class Message(BaseModel):
     id: str
     from_agent: str

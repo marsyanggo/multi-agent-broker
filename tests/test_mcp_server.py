@@ -12,6 +12,7 @@ from mab.mcp_server.broker_client import BrokerClient
 
 EXPECTED_TOOLS = {
     "list_agents",
+    "match_agents",
     "get_agent_info",
     "report_status",
     "send_message",

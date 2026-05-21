@@ -357,6 +357,138 @@ async def test_delete_missing_task_returns_404(two_agents):
         assert r.status_code == 404
 
 
+async def test_stale_detection_when_heartbeat_old(two_agents):
+    app, (key_a, _), (_, agent_b) = two_agents
+    # Backdate bob's heartbeat by 5 minutes so the route flags him stale.
+    db: Database = app.state.db
+    from datetime import timedelta
+
+    from mab.shared.models import utc_now
+
+    old = utc_now() - timedelta(minutes=5)
+    await db.conn.execute(
+        "UPDATE agents SET last_heartbeat = ? WHERE id = ?",
+        (old.isoformat(), agent_b.id),
+    )
+    await db.conn.commit()
+
+    async with AsyncClient(
+        transport=ASGITransport(app=app), base_url="http://t"
+    ) as c:
+        r = await c.get(f"/api/v1/agents/{agent_b.id}", headers=_auth(key_a))
+        body = r.json()
+        assert body["is_stale"] is True
+        assert body["last_heartbeat_age_seconds"] > 60
+
+
+async def test_list_agents_enriched_with_freshness(two_agents):
+    app, (key_a, _), _ = two_agents
+    async with AsyncClient(
+        transport=ASGITransport(app=app), base_url="http://t"
+    ) as c:
+        r = await c.get("/api/v1/agents", headers=_auth(key_a))
+        assert r.status_code == 200
+        rows = r.json()
+        for row in rows:
+            assert "last_heartbeat_age_seconds" in row
+            assert "is_stale" in row
+            # Freshly seeded fixture; should be fresh.
+            assert row["is_stale"] is False
+            assert row["last_heartbeat_age_seconds"] < 60
+
+
+async def test_match_agents_returns_only_matching(two_agents):
+    app, (key_a, _), (key_b, agent_b) = two_agents
+    async with AsyncClient(
+        transport=ASGITransport(app=app), base_url="http://t"
+    ) as c:
+        # Bring bob online + give him a capability profile.
+        await c.patch(
+            "/api/v1/agents/me",
+            headers=_auth(key_b),
+            json={
+                "status": "online",
+                "capabilities": ["tier:opus", "vision"],
+            },
+        )
+
+        r = await c.post(
+            "/api/v1/agents/match",
+            headers=_auth(key_a),
+            json={"required_all": ["tier:opus"]},
+        )
+        assert r.status_code == 200
+        names = [a["name"] for a in r.json()]
+        assert names == ["bob"]
+
+
+async def test_match_agents_available_only_excludes_busy(two_agents):
+    app, (key_a, _), (key_b, agent_b) = two_agents
+    async with AsyncClient(
+        transport=ASGITransport(app=app), base_url="http://t"
+    ) as c:
+        await c.patch(
+            "/api/v1/agents/me",
+            headers=_auth(key_b),
+            json={"status": "online", "capabilities": ["tier:opus"]},
+        )
+
+        # Tie bob to a task.
+        r = await c.post(
+            "/api/v1/tasks",
+            headers=_auth(key_a),
+            json={"title": "occupy bob", "assigned_to": agent_b.id},
+        )
+        assert r.status_code == 201
+
+        # Without available_only: bob matches.
+        r = await c.post(
+            "/api/v1/agents/match",
+            headers=_auth(key_a),
+            json={"required_all": ["tier:opus"], "available_only": False},
+        )
+        assert {a["name"] for a in r.json()} == {"bob"}
+
+        # With available_only: bob is busy → excluded.
+        r = await c.post(
+            "/api/v1/agents/match",
+            headers=_auth(key_a),
+            json={"required_all": ["tier:opus"], "available_only": True},
+        )
+        assert r.json() == []
+
+
+async def test_match_agents_empty_specs_returns_all_online(two_agents):
+    app, (key_a, _), _ = two_agents
+    async with AsyncClient(
+        transport=ASGITransport(app=app), base_url="http://t"
+    ) as c:
+        # Seeded agents register as offline (no WS connect); pass status=null to
+        # see them all — the route default is status="online".
+        r = await c.post(
+            "/api/v1/agents/match",
+            headers=_auth(key_a),
+            json={"status": None},
+        )
+        assert r.status_code == 200
+        assert {a["name"] for a in r.json()} == {"alice", "bob"}
+
+
+async def test_match_agents_filters_by_status(two_agents):
+    app, (key_a, _), _ = two_agents
+    async with AsyncClient(
+        transport=ASGITransport(app=app), base_url="http://t"
+    ) as c:
+        # Fixture seeds agents with status="offline" (gen-key default since they
+        # haven't connected via WS).
+        r = await c.post(
+            "/api/v1/agents/match",
+            headers=_auth(key_a),
+            json={"status": "online"},
+        )
+        assert r.json() == []
+
+
 async def test_directed_assignment_validates_capabilities(two_agents):
     app, (key_a, _), (_, agent_b) = two_agents
     async with AsyncClient(

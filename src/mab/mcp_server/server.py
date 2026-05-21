@@ -71,9 +71,42 @@ mcp = FastMCP("mab-agent")
 @mcp.tool()
 @_with_pending
 async def list_agents(status: str | None = None) -> str:
-    """List known agents. Optional status filter: online, busy, idle, offline."""
+    """List known agents (enriched with liveness). Optional status filter: online, busy, idle, offline.
+
+    Each agent includes `last_heartbeat_age_seconds` and `is_stale` so a Lead Agent
+    can tell who is really around: status="online" but is_stale=true means the WS
+    hasn't sent heartbeat for >3x heartbeat_interval (likely hung)."""
     agents = await _client_or_raise().list_agents(status=status)  # type: ignore[arg-type]
     return _to_json([a.model_dump(mode="json") for a in agents])
+
+
+@mcp.tool()
+@_with_pending
+async def match_agents(
+    required_all: list[str] | None = None,
+    required_any: list[str] | None = None,
+    available_only: bool = False,
+    status: str | None = "online",
+) -> str:
+    """Find agents matching a capability spec (roster check before dispatch).
+
+    Use this before create_task to confirm someone can take the work:
+    - required_all: tags every match must have (AND).
+    - required_any: tags where at least one is required (OR). Empty = no OR clause.
+    - available_only: exclude agents with current_task != null.
+    - status: filter by reported status (default "online"; pass null for all).
+
+    Returns AgentSnapshot list (with last_heartbeat_age_seconds + is_stale).
+    Empty list => nobody around fits the spec; either relax requirements or queue.
+
+    `match_agents()` with no args returns all online agents (handy roster check)."""
+    matched = await _client_or_raise().match_agents(
+        required_all=required_all,
+        required_any=required_any,
+        available_only=available_only,
+        status=status,  # type: ignore[arg-type]
+    )
+    return _to_json([a.model_dump(mode="json") for a in matched])
 
 
 @mcp.tool()

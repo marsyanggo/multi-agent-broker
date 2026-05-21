@@ -10,6 +10,7 @@ import websockets
 
 from mab.shared.models import (
     Agent,
+    AgentSnapshot,
     AgentStatus,
     ContentType,
     Message,
@@ -185,23 +186,43 @@ class BrokerClient:
 
     # --- REST proxy methods ---
 
-    async def list_agents(self, *, status: AgentStatus | None = None) -> list[Agent]:
+    async def list_agents(
+        self, *, status: AgentStatus | None = None
+    ) -> list[AgentSnapshot]:
         params = {"status": status} if status else {}
         r = await self._http.get("/api/v1/agents", params=params)
         r.raise_for_status()
-        return [Agent.model_validate(a) for a in r.json()]
+        return [AgentSnapshot.model_validate(a) for a in r.json()]
 
-    async def get_agent(self, agent_id: str) -> Agent | None:
+    async def get_agent(self, agent_id: str) -> AgentSnapshot | None:
         r = await self._http.get(f"/api/v1/agents/{agent_id}")
         if r.status_code == 404:
             return None
         r.raise_for_status()
-        return Agent.model_validate(r.json())
+        return AgentSnapshot.model_validate(r.json())
 
-    async def get_me(self) -> Agent:
+    async def get_me(self) -> AgentSnapshot:
         r = await self._http.get("/api/v1/agents/me")
         r.raise_for_status()
-        return Agent.model_validate(r.json())
+        return AgentSnapshot.model_validate(r.json())
+
+    async def match_agents(
+        self,
+        *,
+        required_all: list[str] | None = None,
+        required_any: list[str] | None = None,
+        available_only: bool = False,
+        status: AgentStatus | None = "online",
+    ) -> list[AgentSnapshot]:
+        body: dict[str, Any] = {
+            "required_all": required_all or [],
+            "required_any": required_any or [],
+            "available_only": available_only,
+            "status": status,
+        }
+        r = await self._http.post("/api/v1/agents/match", json=body)
+        r.raise_for_status()
+        return [AgentSnapshot.model_validate(a) for a in r.json()]
 
     async def report_status(self, status: AgentStatus) -> Agent:
         r = await self._http.patch("/api/v1/agents/me", json={"status": status})

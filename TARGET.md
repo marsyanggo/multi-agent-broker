@@ -125,9 +125,41 @@ Phase 1 鎖定最小可運行核心：**agent + message + task**。先把兩台 
 
 ---
 
+## Phase 3a — Lead Agent enabler (Roster + Dependencies + Channels)
+
+目標：讓某個 agent 能扮演 lead role — 接 user 目標、拆 task、看 team 點名、指派、監督。Broker 維持 passive，只補 primitives；orchestration 邏輯放在 lead agent 的 prompt 裡。
+
+### 決策（已鎖定）
+
+| 項目 | 決定 |
+|------|------|
+| Orchestration 在哪 | Lead Agent 端，不是 broker 端 — 維持 LLM-agnostic |
+| Roster 表現 | `AgentSnapshot` extends `Agent` 加 `last_heartbeat_age_seconds` + `is_stale` |
+| Stale 閾值 | `heartbeat_interval * 3`（30s × 3 = 90s）。broker 不自動翻 status，只暴露讓 client 判斷 |
+| `available_only` 語意 | `current_task is None` — 暴露給 lead 過濾「真的閒著的人」 |
+| `current_task` 一致性 | 直接 `create_task(assigned_to=X)` 也設 X 的 `current_task`（跟 `claim_task` 對齊） |
+
+### Roster (R)
+
+- [x] **R1.** `AgentSnapshot` model + `db.find_matching_agents` 加 `available_only` 參數
+- [x] **R2.** REST：`list_agents` / `get_me` / `get_agent` 回 `AgentSnapshot`；新 `POST /api/v1/agents/match`
+- [x] **R3.** MCP `match_agents` tool + `BrokerClient.match_agents()`；`list_agents` tool docs 提 `is_stale`
+- [x] **R4.** Tests：snapshot freshness、stale detection、match 過濾（caps / available_only / status）— 6 個新 test
+- [x] **R5.** TARGET.md Phase 3a 章節
+
+### 後續（規劃中）
+
+- [ ] **D1.** Task `depends_on: list[str]` — broker 不 push 給 claimer 直到 deps 都 completed
+- [ ] **D2.** Task `parent_task_id: str | None` — sub-task 結構
+- [ ] **CH1.** `Channel` 實體 + `post_to_channel` / `subscribe_channel` / `leave_channel`
+- [ ] **CH2.** Channel members broadcast 機制（多人 push）
+- [ ] **L1.** `tools/lead_demo.py` — 第一個 Lead Agent 範例 prompt + script，串起 match_agents → create_task with deps → 監看 task_event
+
+---
+
 ## 後續 Phase（暫定）
 
-- **Phase 2**（剩餘）：Channels + shared context + broadcast
+- **Phase 2**（剩餘）：Shared context（pin spec / 設計筆記）
 - **Phase 3**：Python SDK + OpenAI / Ollama / LangChain adapters
 - **Phase 4**：外網部署（TLS / wss / JWT / IP allowlist）
 - **Phase 5**：Web dashboard + 訊息全文檢索

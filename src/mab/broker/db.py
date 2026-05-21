@@ -287,13 +287,17 @@ class Database:
         required_all: list[str],
         required_any: list[str],
         status: AgentStatus | None = None,
+        available_only: bool = False,
     ) -> list[Agent]:
         agents = await self.list_agents(status=status)
-        return [
+        result = [
             a
             for a in agents
             if matches_capabilities(a.capabilities, required_all, required_any)
         ]
+        if available_only:
+            result = [a for a in result if a.current_task is None]
+        return result
 
     # --- Messages ---
 
