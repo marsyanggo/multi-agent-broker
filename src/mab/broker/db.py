@@ -490,6 +490,15 @@ class Database:
         await self.conn.commit()
         return await self.get_task(task_id)
 
+    async def delete_task(self, task_id: str) -> bool:
+        cur = await self.conn.execute(
+            "DELETE FROM tasks WHERE id = ?", (task_id,)
+        )
+        deleted = cur.rowcount > 0
+        await cur.close()
+        await self.conn.commit()
+        return deleted
+
     async def list_tasks(
         self,
         *,

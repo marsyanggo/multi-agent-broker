@@ -125,6 +125,26 @@ async def claim_task(
     return claimed
 
 
+@router.delete("/{task_id}", status_code=204)
+async def delete_task(
+    task_id: str,
+    me: Annotated[Agent, Depends(get_current_agent)],
+    db: Annotated[Database, Depends(get_db)],
+    hub: Annotated[WebSocketHub, Depends(get_hub)],
+) -> None:
+    task = await db.get_task(task_id)
+    if task is None:
+        raise HTTPException(status_code=404, detail="task not found")
+    if me.id != task.created_by and me.id != task.assigned_to:
+        raise HTTPException(
+            status_code=403, detail="only creator or assignee may delete"
+        )
+    await db.delete_task(task_id)
+    if task.assigned_to:
+        await db.set_current_task(task.assigned_to, None)
+    await hub.emit_task_event("deleted", task)
+
+
 @router.patch("/{task_id}", response_model=Task)
 async def update_task(
     task_id: str,

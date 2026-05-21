@@ -186,6 +186,17 @@ async def update_task(
 
 @mcp.tool()
 @_with_pending
+async def delete_task(task_id: str) -> str:
+    """Delete a task I created or am assigned to. Broadcasts task_event:deleted."""
+    try:
+        await _client_or_raise().delete_task(task_id)
+    except Exception as e:
+        return _to_json({"error": str(e), "task_id": task_id})
+    return _to_json({"deleted": task_id})
+
+
+@mcp.tool()
+@_with_pending
 async def list_tasks(
     status: str | None = None,
     assigned_to: str | None = None,

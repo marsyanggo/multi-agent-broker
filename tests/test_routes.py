@@ -292,6 +292,71 @@ async def test_claim_succeeds_when_capabilities_match(two_agents):
         assert r.json()["assigned_to"] == agent_b.id
 
 
+async def test_delete_task_by_creator(two_agents):
+    app, (key_a, _), _ = two_agents
+    async with AsyncClient(
+        transport=ASGITransport(app=app), base_url="http://t"
+    ) as c:
+        r = await c.post(
+            "/api/v1/tasks", headers=_auth(key_a), json={"title": "drop me"}
+        )
+        task_id = r.json()["id"]
+
+        r = await c.delete(f"/api/v1/tasks/{task_id}", headers=_auth(key_a))
+        assert r.status_code == 204
+
+        r = await c.get(f"/api/v1/tasks/{task_id}", headers=_auth(key_a))
+        assert r.status_code == 404
+
+
+async def test_delete_task_by_assignee_clears_current_task(two_agents):
+    app, (key_a, _), (key_b, agent_b) = two_agents
+    async with AsyncClient(
+        transport=ASGITransport(app=app), base_url="http://t"
+    ) as c:
+        r = await c.post(
+            "/api/v1/tasks",
+            headers=_auth(key_a),
+            json={"title": "claim then bail"},
+        )
+        task_id = r.json()["id"]
+
+        await c.post(f"/api/v1/tasks/{task_id}/claim", headers=_auth(key_b))
+        r = await c.get("/api/v1/agents/me", headers=_auth(key_b))
+        assert r.json()["current_task"] == task_id
+
+        r = await c.delete(f"/api/v1/tasks/{task_id}", headers=_auth(key_b))
+        assert r.status_code == 204
+
+        r = await c.get("/api/v1/agents/me", headers=_auth(key_b))
+        assert r.json()["current_task"] is None
+
+
+async def test_delete_task_rejects_non_owner(two_agents):
+    app, (key_a, _), (key_b, _) = two_agents
+    async with AsyncClient(
+        transport=ASGITransport(app=app), base_url="http://t"
+    ) as c:
+        r = await c.post(
+            "/api/v1/tasks",
+            headers=_auth(key_a),
+            json={"title": "alice owns this"},
+        )
+        task_id = r.json()["id"]
+
+        r = await c.delete(f"/api/v1/tasks/{task_id}", headers=_auth(key_b))
+        assert r.status_code == 403
+
+
+async def test_delete_missing_task_returns_404(two_agents):
+    app, (key_a, _), _ = two_agents
+    async with AsyncClient(
+        transport=ASGITransport(app=app), base_url="http://t"
+    ) as c:
+        r = await c.delete("/api/v1/tasks/nonexistent", headers=_auth(key_a))
+        assert r.status_code == 404
+
+
 async def test_directed_assignment_validates_capabilities(two_agents):
     app, (key_a, _), (_, agent_b) = two_agents
     async with AsyncClient(

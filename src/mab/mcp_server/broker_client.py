@@ -272,6 +272,10 @@ class BrokerClient:
         r.raise_for_status()
         return Task.model_validate(r.json())
 
+    async def delete_task(self, task_id: str) -> None:
+        r = await self._http.delete(f"/api/v1/tasks/{task_id}")
+        r.raise_for_status()
+
     async def update_task(
         self,
         task_id: str,

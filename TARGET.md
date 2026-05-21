@@ -109,6 +109,16 @@ Phase 1 鎖定最小可運行核心：**agent + message + task**。先把兩台 
 - [x] **C5.** MCP `create_task` tool 加 `required_all/required_any` 參數 + `mab-agent --model X / --capabilities a,b` flag + 啟動時 PATCH `/agents/me`
 - [x] **C6.** 測試：matcher unit（10）+ derive_from_model unit + REST capability E2E（5）+ WS filter broadcast（1）
 - [x] **C7.** TARGET.md 補 Phase 2.1 章節
+- [x] **C8.** Fix WS heartbeat — broker 只在 `receive_text()` 更新 `last_heartbeat`，protocol ping 永遠不會觸發；client 加 app-layer text heartbeat
+- [x] **C9.** Rewrite README — 寫入 Phase 1.5 deployment + 2.1 capability 完整設計，push 上 GitHub
+
+---
+
+## Phase 2.2 — Task delete + observability
+
+- [x] **E1.** `DELETE /api/v1/tasks/{id}` — creator 或 assignee 可刪、任何狀態、自動清 `current_task`、廣播 `task_event:deleted`
+- [x] **E2.** `tools/watch.py` — 連 broker 印 received messages / task events，用來看 capability filter broadcast 真的有過濾
+- [x] **E3.** `task_event:deleted` 加進 protocol discriminator + MCP `delete_task` tool
 
 ---
 

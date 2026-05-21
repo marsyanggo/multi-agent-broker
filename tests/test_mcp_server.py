@@ -19,11 +19,12 @@ EXPECTED_TOOLS = {
     "create_task",
     "claim_task",
     "update_task",
+    "delete_task",
     "list_tasks",
 }
 
 
-async def test_all_nine_tools_registered():
+async def test_all_tools_registered():
     tools = await srv.mcp.list_tools()
     names = {t.name for t in tools}
     assert names == EXPECTED_TOOLS

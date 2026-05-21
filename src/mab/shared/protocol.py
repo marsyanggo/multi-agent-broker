@@ -7,7 +7,9 @@ from pydantic import BaseModel, Field, TypeAdapter
 
 from mab.shared.models import Agent, Message, Task, utc_now
 
-TaskEventName = Literal["created", "claimed", "updated", "completed", "failed"]
+TaskEventName = Literal[
+    "created", "claimed", "updated", "completed", "failed", "deleted"
+]
 AgentEventName = Literal["online", "offline"]
 
 
