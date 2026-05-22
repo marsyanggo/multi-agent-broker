@@ -153,13 +153,19 @@ Phase 1 鎖定最小可運行核心：**agent + message + task**。先把兩台 
 - [x] **G2.** MCP tools `update_my_model` / `update_my_capabilities` — 讓 LLM 在 session 內自己改 declared model（例如 `/fast` 切 model 時）
 - [x] **G3.** README 補非 MCP client 的寫法 + 「How an agent declares its model」段（4 條路徑說明）
 
+### Slash-command mode skills (M)
+
+- [x] **M1.** `.claude/skills/worker-mode/SKILL.md` — `/worker-mode` 把 session 切成 autonomous worker daemon（polling 30s + claim + execute + update lifecycle）
+- [x] **M2.** `.claude/skills/lead-mode/SKILL.md` — `/lead-mode` 把 session 切成 orchestrator（roster scout + decompose + dispatch + monitor + synthesize）
+- [x] **M3.** README 加 `/lead-mode` + `/worker-mode` 段落；`.gitignore` 排除 `.claude/settings.local.json` 但保留 `.claude/skills/`
+
 ### 後續（規劃中）
 
 - [ ] **D1.** Task `depends_on: list[str]` — broker 不 push 給 claimer 直到 deps 都 completed
 - [ ] **D2.** Task `parent_task_id: str | None` — sub-task 結構
 - [ ] **CH1.** `Channel` 實體 + `post_to_channel` / `subscribe_channel` / `leave_channel`
 - [ ] **CH2.** Channel members broadcast 機制（多人 push）
-- [ ] **L1.** `tools/lead_demo.py` — 第一個 Lead Agent 範例 prompt + script，串起 match_agents → create_task with deps → 監看 task_event
+- [ ] **W1.** `tools/wait_for_task.py` — push-driven WS blocking helper（升級 polling 版 worker-mode 到 sub-second latency）
 
 ---
 

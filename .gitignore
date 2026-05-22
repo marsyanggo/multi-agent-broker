@@ -20,3 +20,6 @@ build/
 
 # OS
 .DS_Store
+
+# Claude Code per-user local settings (skills/ stays committed)
+.claude/settings.local.json

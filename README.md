@@ -102,6 +102,23 @@ Claude: [calls create_task(title="...", required_all=["tier:opus"])]
 
 If a non-opus agent tries to claim the same task, the broker returns `403` and the task stays pending.
 
+### `/lead-mode` + `/worker-mode` slash commands
+
+The repo ships two Claude Code skills (under `.claude/skills/`) that turn any Claude session into either an orchestrator or a worker daemon with one slash command:
+
+| Command | Role | What it does |
+|---------|------|--------------|
+| `/lead-mode` | Planner / dispatcher | Scouts the roster, decomposes user goals into sub-tasks, picks best-fit agents by capability, monitors progress, synthesizes results |
+| `/worker-mode` | Autonomous executor | Polls `list_tasks(assigned_to=me)` every 30s, claims new work, executes per task description, reports `completed` or `failed`, loops |
+
+Typical multi-host setup:
+- **Lead host (e.g. your laptop)** — `/lead-mode` once, then talk to it like a project manager
+- **Worker hosts (e.g. a Linux box, a GPU machine)** — `/worker-mode` once, leave it running
+
+The skills are pure prompt + existing MCP tools — no daemon process, no new Python. The 30-second polling cadence is the only latency cost; for push-driven sub-second routing, layer in a `tools/wait_for_task.py` blocking-WS helper (planned).
+
+See the skill files themselves for the full behaviour spec.
+
 ### Observing routing live
 
 If you want to see *which* events reach a given agent without bolting it into Claude Code, run `tools/watch.py` on the same host as that agent's API key:
