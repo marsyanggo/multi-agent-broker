@@ -11,7 +11,7 @@ Spin up the broker on any reachable host, register one API key per agent, and Cl
 ## What's in the box
 
 - **Central broker** — FastAPI + SQLite (WAL) + WebSocket Hub; one binary, zero external dependencies
-- **MCP stdio agent** — `mab-agent` plugs into Claude Code via `.mcp.json` or `claude mcp add`; **10 tools** cover agent discovery, direct messaging, full task lifecycle (including `delete_task`)
+- **MCP stdio agent** — `mab-agent` plugs into Claude Code via `.mcp.json` or `claude mcp add`; **13 tools** cover roster discovery (`list_agents` / `match_agents`), self-declaration (`update_my_model` / `update_my_capabilities`), messaging, and full task lifecycle (including `delete_task`)
 - **Capability-based routing** — tasks carry `required_all` / `required_any` tag sets; broker filters WS broadcast to matching online agents and rejects mismatched claims (`403`) or directed assignments (`400`)
 - **Model-aware agents** — `mab-agent --model claude-opus-4-7` auto-derives `model:` / `family:` / `tier:` / `provider:` tags so capabilities track the runtime model identity
 - **Push-aware tool responses** — every MCP tool reply embeds `_pending_messages` / `_pending_task_events` counts so Claude Code (which cannot be push-interrupted) is nudged to drain its queue on the next tool call
@@ -84,7 +84,12 @@ mab-agent --broker-url ... --api-key ... \
   --capabilities vision,code-review     # extra tags merged with model derivation
 ```
 
-Restart Claude Code. You'll see 10 tools: `list_agents`, `get_agent_info`, `report_status`, `send_message`, `get_messages`, `create_task`, `claim_task`, `update_task`, `delete_task`, `list_tasks`.
+Restart Claude Code. You'll see 13 tools:
+
+- **Roster** — `list_agents`, `match_agents`, `get_agent_info`
+- **Self** — `report_status`, `update_my_model`, `update_my_capabilities`
+- **Messaging** — `send_message`, `get_messages`
+- **Tasks** — `create_task`, `claim_task`, `update_task`, `delete_task`, `list_tasks`
 
 ### Try it out
 
@@ -170,6 +175,44 @@ Tags follow a `prefix:value` convention (with bare tags also allowed). The match
 
 `mab-agent --model X` auto-derives `model:`, `family:`, `tier:`, `provider:` for known model families (claude, gpt, gemini, llama, mistral). Unknown model strings only get `model:X` — anything richer should be passed via `--capabilities`.
 
+### How an agent declares its model
+
+Four ways an agent can claim which model it runs (in order of recommendation):
+
+1. **`mab-agent --model X` at startup** — derives the standard tags + `PATCH /agents/me` *before* opening the WebSocket, so the broker has correct caps when the agent comes online. Best for fixed-per-process deployments (Claude Code via MCP).
+2. **`mab-agent --capabilities a,b` merge** — combines with `--model` for runtime extras (e.g. add `vision` for a session). Full replacement of stored tags; not append.
+3. **`update_my_model` / `update_my_capabilities` MCP tools** — the LLM driving the agent can self-update mid-session. Use when the model switches at runtime (e.g. Claude Code `/fast` toggle) or to add a per-task skill flag.
+4. **`mab-broker gen-key --capabilities ...`** — persist a default in the broker DB at registration time. Survives across restarts but won't reflect runtime model changes.
+
+In practice: `gen-key` for the immutable identity, `--model` flag for the per-process runtime claim, MCP tools for in-session corrections.
+
+### Writing a non-MCP client
+
+Any process speaking REST + WS can join the broker. Reuse `BrokerClient` directly:
+
+```python
+from mab.mcp_server.broker_client import BrokerClient
+from mab.shared.capabilities import derive_capabilities_from_model
+
+client = BrokerClient(
+    broker_url="http://192.168.1.100:8420",
+    api_key="mab-ak-XXXX",
+)
+# Declare before going online so task routing sees fresh caps.
+await client.update_capabilities(
+    derive_capabilities_from_model("llama-3.3-70b") + ["gpu-local"]
+)
+await client.start()           # WS connect + auto-reconnect + heartbeat
+# Now drain events as they arrive:
+while ...:
+    for msg in client.drain_messages():
+        ...
+    for task in client.drain_task_events():
+        ...
+```
+
+`tools/watch.py` is a complete example of this pattern. A Phase 3 SDK will package it into a proper public API; the helpers above already work today.
+
 ### Task match semantics
 
 A task carries two optional tag lists, both AND-of-AND-then-AND-of-OR:
@@ -225,7 +268,7 @@ CLI flags on `mab-agent` mirror the env vars; CLI takes precedence.
 
 ```bash
 uv run pytest
-# 72 tests, ~25s — includes real-subprocess end-to-end demo
+# 81 tests, ~25s — includes real-subprocess end-to-end demo
 ```
 
 Test layout:
@@ -248,7 +291,8 @@ Test layout:
 - **Phase 1** ✅ — broker + MCP agent (agent / message / task)
 - **Phase 1.5** ✅ — one-shot deployment (uv + systemd user service)
 - **Phase 2.1** ✅ — capability-based task routing
-- **Phase 2.2** ✅ — task delete + `tools/watch.py` observability + live multi-agent cross-machine verification (this release)
+- **Phase 2.2** ✅ — task delete + `tools/watch.py` observability + live multi-agent cross-machine verification
+- **Phase 3a (in progress)** ✅ Roster (`match_agents` + freshness/stale fields + capability self-update MCP tools); next: task `depends_on`, channels, lead_demo
 - **Phase 2 (remaining)** — channels + shared code/context + broadcast
 - **Phase 3** — Python SDK + OpenAI / Ollama / LangChain adapters
 - **Phase 4** — TLS + JWT + IP allowlist for public-internet deployment

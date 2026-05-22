@@ -131,6 +131,43 @@ async def report_status(status: str) -> str:
 
 @mcp.tool()
 @_with_pending
+async def update_my_model(
+    model: str,
+    extra_capabilities: list[str] | None = None,
+) -> str:
+    """Re-declare which model this agent is running. Replaces my capability tags.
+
+    Derives `model:<exact>`, `family:<x>`, `tier:<x>`, `provider:<x>` from the
+    model identifier (for known model families) and merges in any
+    extra_capabilities. Use this if the runtime model has changed since the
+    agent started (e.g. user switched from claude-opus-4-7 to
+    claude-sonnet-4-6) so future tasks route correctly.
+
+    Pass the exact model string (e.g. "claude-opus-4-7", "claude-sonnet-4-6",
+    "gpt-4o", "gemini-2.5-pro", "llama-3.3-70b")."""
+    caps = _resolve_capabilities(model, extra_capabilities)
+    if not caps:
+        return _to_json({"error": "empty model + extra_capabilities"})
+    agent = await _client_or_raise().update_capabilities(caps)
+    _client_or_raise().agent = agent
+    return _to_json(agent.model_dump(mode="json"))
+
+
+@mcp.tool()
+@_with_pending
+async def update_my_capabilities(capabilities: list[str]) -> str:
+    """Replace my capability tags with the given list (full replacement, not merge).
+
+    Prefer `update_my_model` if you just want to declare model/family/tier;
+    use this when you need precise control or are adding/removing non-model
+    tags (e.g. vision, code-review)."""
+    agent = await _client_or_raise().update_capabilities(capabilities)
+    _client_or_raise().agent = agent
+    return _to_json(agent.model_dump(mode="json"))
+
+
+@mcp.tool()
+@_with_pending
 async def send_message(
     to_agent: str,
     content: str,
@@ -246,6 +283,19 @@ async def list_tasks(
     return _to_json([t.model_dump(mode="json") for t in tasks])
 
 
+def _resolve_capabilities(
+    model: str | None,
+    extra_capabilities: list[str] | None,
+) -> list[str]:
+    caps: list[str] = []
+    if model:
+        caps.extend(derive_capabilities_from_model(model))
+    if extra_capabilities:
+        caps.extend(extra_capabilities)
+    seen: set[str] = set()
+    return [c for c in caps if not (c in seen or seen.add(c))]
+
+
 async def _serve(
     broker_url: str,
     api_key: str,
@@ -255,20 +305,17 @@ async def _serve(
 ) -> None:
     global _client
     _client = BrokerClient(broker_url=broker_url, api_key=api_key)
-    await _client.start()
 
-    if model or extra_capabilities:
-        caps: list[str] = []
-        if model:
-            caps.extend(derive_capabilities_from_model(model))
-        if extra_capabilities:
-            caps.extend(extra_capabilities)
-        # Dedup preserving order.
-        seen: set[str] = set()
-        deduped = [c for c in caps if not (c in seen or seen.add(c))]
-        updated = await _client.update_capabilities(deduped)
+    # PATCH capabilities BEFORE WS connect so the broker's online broadcast
+    # (and any concurrent task creates) see the fresh tag set, not whatever
+    # gen-key left behind.
+    caps = _resolve_capabilities(model, extra_capabilities)
+    if caps:
+        updated = await _client.update_capabilities(caps)
+        log.info("capabilities pre-declared: %s", caps)
         _client.agent = updated
-        log.info("capabilities updated: %s", deduped)
+
+    await _client.start()
 
     log.info(
         "mab-agent connected: name=%s id=%s",

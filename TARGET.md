@@ -147,6 +147,12 @@ Phase 1 鎖定最小可運行核心：**agent + message + task**。先把兩台 
 - [x] **R4.** Tests：snapshot freshness、stale detection、match 過濾（caps / available_only / status）— 6 個新 test
 - [x] **R5.** TARGET.md Phase 3a 章節
 
+### Agent self-declaration gaps (G)
+
+- [x] **G1.** `mab-agent` 啟動時 PATCH capabilities **before** WS connect，消除 broker `online` 廣播時 caps 過時的 race
+- [x] **G2.** MCP tools `update_my_model` / `update_my_capabilities` — 讓 LLM 在 session 內自己改 declared model（例如 `/fast` 切 model 時）
+- [x] **G3.** README 補非 MCP client 的寫法 + 「How an agent declares its model」段（4 條路徑說明）
+
 ### 後續（規劃中）
 
 - [ ] **D1.** Task `depends_on: list[str]` — broker 不 push 給 claimer 直到 deps 都 completed

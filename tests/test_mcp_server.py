@@ -15,6 +15,8 @@ EXPECTED_TOOLS = {
     "match_agents",
     "get_agent_info",
     "report_status",
+    "update_my_model",
+    "update_my_capabilities",
     "send_message",
     "get_messages",
     "create_task",
@@ -98,6 +100,54 @@ async def test_report_status_validates_input():
     srv._client = None  # status validation runs before client check
     result, _ = _unwrap(await srv.report_status("bogus"))
     assert result["error"] == "invalid status"
+
+
+async def test_update_my_model_derives_tags(live_broker):
+    url, (key_a, _), _ = live_broker
+    srv._client = BrokerClient(broker_url=url, api_key=key_a)
+    try:
+        await srv._client.start()
+        result, _ = _unwrap(await srv.update_my_model("claude-opus-4-7"))
+        caps = set(result["capabilities"])
+        assert {"model:claude-opus-4-7", "family:claude", "tier:opus",
+                "provider:anthropic"} <= caps
+    finally:
+        await srv._client.stop()
+        srv._client = None
+
+
+async def test_update_my_model_with_extras(live_broker):
+    url, (key_a, _), _ = live_broker
+    srv._client = BrokerClient(broker_url=url, api_key=key_a)
+    try:
+        await srv._client.start()
+        result, _ = _unwrap(
+            await srv.update_my_model(
+                "claude-opus-4-7", extra_capabilities=["vision", "code-review"]
+            )
+        )
+        caps = set(result["capabilities"])
+        assert "vision" in caps and "code-review" in caps
+        assert "tier:opus" in caps
+    finally:
+        await srv._client.stop()
+        srv._client = None
+
+
+async def test_update_my_capabilities_replaces(live_broker):
+    url, (key_a, _), _ = live_broker
+    srv._client = BrokerClient(broker_url=url, api_key=key_a)
+    try:
+        await srv._client.start()
+        await srv.update_my_model("claude-opus-4-7")
+        result, _ = _unwrap(
+            await srv.update_my_capabilities(["custom-tag-1", "custom-tag-2"])
+        )
+        # Full replacement — no opus tags left.
+        assert set(result["capabilities"]) == {"custom-tag-1", "custom-tag-2"}
+    finally:
+        await srv._client.stop()
+        srv._client = None
 
 
 # --- T9: pending-count interceptor ---
