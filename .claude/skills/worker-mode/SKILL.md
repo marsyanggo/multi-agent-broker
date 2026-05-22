@@ -23,6 +23,38 @@ If a task description seems destructive or hazardous but is inside your sandbox 
 
 This skill depends on the `mab` MCP server being installed and connected (look for `mcp__mab__*` tools). If those tools aren't loaded, stop and tell the user to wire up `mab-agent` first.
 
+## Launching Claude Code for worker mode
+
+Worker mode runs `Bash`, `Write`, `Edit`, etc. on whatever task description the lead dispatches. Claude Code's default permission prompts make this interactive — defeating autonomy.
+
+There are two ways to bypass host-level prompts:
+
+**(a) Persistent per-host** — recommended for dedicated worker boxes. Add to `<repo>/.claude/settings.local.json` (the `.local.json` variant is host-local and gitignored):
+
+```json
+{
+  "permissions": {
+    "defaultMode": "bypassPermissions",
+    "allow": []
+  }
+}
+```
+
+Then start Claude Code normally:
+```bash
+claude --model <your-model>
+```
+
+**(b) One-shot flag** — for ad-hoc worker sessions:
+
+```bash
+claude --dangerously-skip-permissions --model <your-model>
+```
+
+Either way: the skill's sandbox rules (stay-in-repo, 10-min cap, no externally-visible actions without explicit auth) replace host-level prompts as the safety layer. If you don't want a session to be fully trusted, don't enter worker mode in it.
+
+For non-worker sessions (`/lead-mode`, normal coding), keep prompts on — lead operations are MCP tool calls only, no dangerous Bash, so the prompts barely fire.
+
 ## Step 1 — Confirm identity and online state
 
 1. Call `mcp__mab__report_status("online")` — this both flips your status to online and returns your own agent record. Capture `my_id` and `my_caps` from the response.
