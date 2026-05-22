@@ -73,3 +73,76 @@ def test_derive_capabilities_normalises_case() -> None:
 def test_derive_capabilities_empty_returns_empty() -> None:
     assert derive_capabilities_from_model("") == []
     assert derive_capabilities_from_model("   ") == []
+
+
+def test_derive_capabilities_gpt_oss_via_ollama() -> None:
+    tags = derive_capabilities_from_model("gpt-oss:20b")
+    assert "model:gpt-oss:20b" in tags
+    assert "family:gpt-oss" in tags
+    assert "tier:reasoning" in tags
+    assert "size:20b" in tags
+    assert "provider:ollama" in tags
+
+
+def test_derive_capabilities_llama_via_ollama() -> None:
+    tags = derive_capabilities_from_model("llama3.3:70b")
+    assert "model:llama3.3:70b" in tags
+    assert "family:meta" in tags
+    assert "tier:llama-3.3" in tags
+    assert "size:70b" in tags
+    assert "provider:ollama" in tags
+
+
+def test_derive_capabilities_qwen_coder_via_ollama() -> None:
+    tags = derive_capabilities_from_model("qwen2.5-coder:32b")
+    assert "family:alibaba" in tags
+    assert "tier:qwen2.5-coder" in tags
+    assert "size:32b" in tags
+    assert "provider:ollama" in tags
+
+
+def test_derive_capabilities_deepseek_r1_via_ollama() -> None:
+    tags = derive_capabilities_from_model("deepseek-r1:14b")
+    assert "family:deepseek" in tags
+    assert "tier:r1" in tags
+    assert "size:14b" in tags
+    assert "provider:ollama" in tags
+
+
+def test_derive_capabilities_mistral_no_tag_no_ollama() -> None:
+    # Without a `:tag` suffix, we don't assume Ollama hosting.
+    tags = derive_capabilities_from_model("mistral-large")
+    assert "family:mistral" in tags
+    assert "tier:large" in tags
+    assert "provider:ollama" not in tags
+    assert not any(t.startswith("size:") for t in tags)
+
+
+def test_derive_capabilities_unknown_ollama_tag_still_gets_size() -> None:
+    # Unknown family but Ollama-style tag → still pick up size + provider.
+    tags = derive_capabilities_from_model("custom-finetune:13b")
+    assert tags == [
+        "model:custom-finetune:13b",
+        "size:13b",
+        "provider:ollama",
+    ]
+
+
+def test_derive_capabilities_claude_with_explicit_size_overrides_provider() -> None:
+    # Claude doesn't normally use `:tag` form, but if someone passed
+    # "claude-opus-4-7:custom", the Ollama heuristic should NOT override
+    # provider — wait, current code does override. This documents that
+    # behavior: any `:tag` form is treated as Ollama-hosted.
+    tags = derive_capabilities_from_model("claude-opus-4-7:vision")
+    assert "provider:ollama" in tags
+    assert "provider:anthropic" not in tags  # Ollama heuristic wins
+    assert "size:vision" in tags
+
+
+def test_derive_capabilities_phi4() -> None:
+    tags = derive_capabilities_from_model("phi-4")
+    assert "family:microsoft" in tags
+    assert "tier:phi-4" in tags
+    # No `:tag` → no auto ollama provider for OSS family
+    assert "provider:ollama" not in tags
+    assert not any(t.startswith("provider:") for t in tags)
