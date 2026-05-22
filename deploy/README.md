@@ -1,6 +1,12 @@
 # Deployment — multi-agent-broker
 
-One-shot install for a single Linux PC. Runs the broker as a systemd **user service** — no dedicated `mab` system user, no writes under `/etc`. Sudo is required exactly once (for `loginctl enable-linger`).
+One-command install + one-command update for a single Linux PC. Runs the broker as a systemd **user service** — no dedicated `mab` system user, no writes under `/etc`. Sudo is required exactly once at install time (for `loginctl enable-linger`); updates are 100% non-sudo.
+
+| Action | Command |
+|--------|---------|
+| Install | `./deploy/install.sh` |
+| Update | `./deploy/update.sh` |
+| Uninstall (keeps DB) | `./deploy/uninstall.sh` |
 
 ## Prerequisites
 
@@ -78,12 +84,31 @@ systemctl --user restart mab-broker
 
 ```bash
 cd /path/to/multi-agent-broker
-git pull
+./deploy/update.sh
+```
+
+What it does (in order, aborts on any failure):
+
+1. Refuses to run if the working tree is dirty (`git status` not clean) — your local changes are safe
+2. `git fetch`, prints the incoming commit list
+3. `git pull --ff-only` (refuses to overwrite local history)
+4. `uv sync` (applies any new dependencies)
+5. `systemctl --user restart mab-broker.service`
+6. Polls `/health` until ready (or fails after 15s with rollback hint)
+7. Prints `OLD_HEAD → NEW_HEAD` summary + commit count applied
+
+Safe to re-run when there's nothing new — it'll print "Already up to date" and still verify deps + health.
+
+If `update.sh` aborts, your previous SHA is still checked out and the service was never restarted — production is unchanged.
+
+For manual control or recovery, the underlying commands are:
+
+```bash
+cd /path/to/multi-agent-broker
+git pull --ff-only
 uv sync
 systemctl --user restart mab-broker
 ```
-
-Or just re-run `./deploy/install.sh` — it's idempotent.
 
 ## Uninstall
 

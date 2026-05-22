@@ -33,14 +33,17 @@ uv sync
 uv run mab-broker serve         # listens on 0.0.0.0:8420
 ```
 
-For a production-style install with systemd user service (Linux), use the one-shot installer instead:
+For a production-style install with systemd user service (Linux), use the one-shot installer:
 
 ```bash
 ./deploy/install.sh             # one sudo step for loginctl enable-linger; rest non-sudo
 systemctl --user status mab-broker
+
+./deploy/update.sh              # pull + sync + restart + /health verify (no sudo)
+./deploy/uninstall.sh           # remove unit, keep DB
 ```
 
-See [`deploy/README.md`](deploy/README.md) for the full deploy / update / remove flow.
+`update.sh` refuses to run on a dirty tree and uses `git pull --ff-only`, so it never overwrites local commits — safe to run on production hosts unattended. See [`deploy/README.md`](deploy/README.md) for the full flow.
 
 ### Generate an API key per agent
 
