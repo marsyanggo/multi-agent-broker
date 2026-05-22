@@ -4,7 +4,7 @@
 
 Spin up the broker on any reachable host, register one API key per agent, and Claude Code / Gemini CLI instances on separate boxes can list each other, exchange direct messages, and pass tasks back and forth. Tasks can require specific model capabilities (e.g. `tier:opus`, `family:claude`, `vision`) so high-stakes work only goes to agents that can handle it. Claude Code integration ships today via MCP stdio; REST + WebSocket are open for any other language or LLM framework to plug in.
 
-> **Status:** Phase 1 (core) + Phase 1.5 (deployment) + Phase 2.1 (capability routing) + Phase 2.2 (task delete + observability) complete. 72 tests, real-subprocess end-to-end demos, one-shot installer for Linux PCs, live cross-machine setup on Linux (broker) ↔ macOS (Claude Code via MCP), and live multi-agent filter-broadcast demo (claude-mac opus + worker-linux sonnet) — tasks with `required_all=[tier:opus]` reach claude-mac but never reach worker-linux, verified end-to-end. Channels / shared context / Python SDK adapters land in Phase 2-3.
+> **Status:** Phase 1 (core) + Phase 1.5 (deployment) + Phase 2.1 (capability routing) + Phase 2.2 (task delete + observability) + Phase 3a Roster (`match_agents` + freshness + capability self-update) complete. 81 tests, real-subprocess end-to-end demos, one-shot installer for Linux PCs, live cross-machine setup on Linux (broker) ↔ macOS (Claude Code via MCP), and live multi-agent filter-broadcast demo (claude-mac opus + worker-linux sonnet) — tasks with `required_all=[tier:opus]` reach claude-mac but never reach worker-linux, verified end-to-end. Task dependencies / channels / shared context / Python SDK adapters land in Phase 3 onwards.
 
 ---
 
@@ -281,7 +281,7 @@ Test layout:
 | `tests/test_routes.py` | REST routes against in-process FastAPI, including capability validation + task delete (creator / assignee / non-owner / 404) |
 | `tests/test_websocket.py` | Hub routing, backfill, agent/task events, capability filter broadcast |
 | `tests/test_broker_client.py` | `BrokerClient` against a live uvicorn broker (including app heartbeat) |
-| `tests/test_mcp_server.py` | MCP tool wiring (10 tools) + `_pending_messages` interceptor |
+| `tests/test_mcp_server.py` | MCP tool wiring (13 tools) + `_pending_messages` interceptor + `update_my_model` derivation |
 | `tests/test_e2e_demo.py` | `mab-broker serve` + 2× `mab-agent` via MCP stdio (4 demo scenarios) |
 
 ---
@@ -292,8 +292,9 @@ Test layout:
 - **Phase 1.5** ✅ — one-shot deployment (uv + systemd user service)
 - **Phase 2.1** ✅ — capability-based task routing
 - **Phase 2.2** ✅ — task delete + `tools/watch.py` observability + live multi-agent cross-machine verification
-- **Phase 3a (in progress)** ✅ Roster (`match_agents` + freshness/stale fields + capability self-update MCP tools); next: task `depends_on`, channels, lead_demo
-- **Phase 2 (remaining)** — channels + shared code/context + broadcast
+- **Phase 3a (partial)** ✅ — Lead Agent enablers: roster (`match_agents` + `is_stale` + `current_task` freshness), capability self-update MCP tools (`update_my_model` / `update_my_capabilities`), pre-WS capability declaration to close the startup race
+- **Phase 3a (next)** — task `depends_on`, channels, `tools/lead_demo.py`
+- **Phase 2 (remaining)** — shared code/context (pin spec / design notes)
 - **Phase 3** — Python SDK + OpenAI / Ollama / LangChain adapters
 - **Phase 4** — TLS + JWT + IP allowlist for public-internet deployment
 - **Phase 5** — Web dashboard + message full-text search
