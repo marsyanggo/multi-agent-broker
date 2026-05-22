@@ -60,6 +60,14 @@ Use `setup-agent.sh`. It probes the broker, validates the key, then writes the M
   --model     claude-opus-4-7              # optional; auto-derives capability tags
 ```
 
+If this machine is a **dedicated worker host** (will run `/worker-mode`), also pass `--worker-host`:
+
+```bash
+./deploy/setup-agent.sh ... --worker-host
+```
+
+That additionally writes `<repo>/.claude/settings.local.json` with `permissions.defaultMode = "bypassPermissions"` so worker mode can execute Bash / Write / Edit calls without permission prompts. The `.local.json` file is gitignored — per-host opt-in. **Do not** pass this on a machine where you also use the same repo for interactive dev; the bypass applies to every Claude Code session opened in that directory.
+
 Then **restart Claude Code on that host** — MCP servers only load at session startup. After restart, `claude mcp list` should show `mab: ✓ Connected`, and the `/lead-mode` / `/worker-mode` slash commands become usable.
 
 `setup-agent.sh` is safe to re-run (idempotent) and never touches the broker DB — it only manipulates the local Claude config.

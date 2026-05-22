@@ -20,16 +20,22 @@ BROKER_URL="${MAB_BROKER_URL:-}"
 API_KEY="${MAB_API_KEY:-}"
 MODEL="${MAB_MODEL:-}"
 NAME="mab"
+WORKER_HOST=false
 
 usage() {
     cat <<EOF
-Usage: $0 --broker-url URL --api-key KEY [--model MODEL] [--name NAME]
+Usage: $0 --broker-url URL --api-key KEY [--model MODEL] [--name NAME] [--worker-host]
 
   --broker-url URL   broker REST endpoint (e.g. http://192.168.1.100:8420)
   --api-key KEY      mab-ak-... API key generated on the broker host
   --model MODEL      (optional) model identifier to declare on startup
-                     (e.g. claude-opus-4-7, claude-sonnet-4-6, gemini-2.5-pro)
+                     (e.g. claude-opus-4-7, claude-sonnet-4-6, gpt-oss:120b-cloud)
   --name NAME        (optional) MCP server name in ~/.claude.json (default: mab)
+  --worker-host      (optional) ALSO configure <repo>/.claude/settings.local.json
+                     to bypass Claude Code permission prompts. Required for
+                     /worker-mode autonomy on this host. The .local.json file
+                     is gitignored, so this stays per-host. DESTRUCTIVE FOR
+                     INTERACTIVE USE: don't pass this on your dev box.
 
 Env vars MAB_BROKER_URL / MAB_API_KEY / MAB_MODEL are honoured if flags omitted.
 EOF
@@ -38,11 +44,12 @@ EOF
 # --- arg parse ---
 while [[ $# -gt 0 ]]; do
     case "$1" in
-        --broker-url) BROKER_URL="$2"; shift 2 ;;
-        --api-key)    API_KEY="$2";    shift 2 ;;
-        --model)      MODEL="$2";      shift 2 ;;
-        --name)       NAME="$2";       shift 2 ;;
-        -h|--help)    usage; exit 0 ;;
+        --broker-url)   BROKER_URL="$2"; shift 2 ;;
+        --api-key)      API_KEY="$2";    shift 2 ;;
+        --model)        MODEL="$2";      shift 2 ;;
+        --name)         NAME="$2";       shift 2 ;;
+        --worker-host)  WORKER_HOST=true; shift ;;
+        -h|--help)      usage; exit 0 ;;
         *) echo "error: unknown arg: $1" >&2; usage >&2; exit 2 ;;
     esac
 done
@@ -140,7 +147,50 @@ if command -v claude >/dev/null 2>&1; then
     fi
 fi
 
-# --- 6. next steps ---
+# --- 6. worker-host setup (optional) ---
+if $WORKER_HOST; then
+    SETTINGS_PATH="$REPO_ROOT/.claude/settings.local.json"
+    echo "==> Configuring $SETTINGS_PATH for worker-mode autonomy"
+    mkdir -p "$(dirname "$SETTINGS_PATH")"
+    python3 - "$SETTINGS_PATH" <<'PYEOF'
+import json, shutil, sys
+from pathlib import Path
+
+cfg_path = Path(sys.argv[1])
+if cfg_path.exists():
+    backup = cfg_path.with_suffix(".json.mab-bak")
+    shutil.copy2(cfg_path, backup)
+    print(f"    backup: {backup}")
+    with cfg_path.open() as f:
+        cfg = json.load(f)
+else:
+    cfg = {}
+
+permissions = cfg.setdefault("permissions", {})
+prev_mode = permissions.get("defaultMode")
+permissions["defaultMode"] = "bypassPermissions"
+# Preserve any existing allow / deny lists.
+permissions.setdefault("allow", [])
+
+with cfg_path.open("w") as f:
+    json.dump(cfg, f, indent=2)
+    f.write("\n")
+
+if prev_mode == "bypassPermissions":
+    print(f"    OK — permissions.defaultMode already 'bypassPermissions'")
+else:
+    print(f"    OK — permissions.defaultMode = 'bypassPermissions' (was: {prev_mode!r})")
+PYEOF
+    echo "    NOTE: This bypasses all Claude Code permission prompts for sessions"
+    echo "          opened in $REPO_ROOT. Don't run /lead-mode or interactive dev"
+    echo "          work in this directory on this host unless you're OK with that."
+fi
+
+# --- 7. next steps ---
+WORKER_LINE=""
+if $WORKER_HOST; then
+    WORKER_LINE="  Worker host:      yes — permission prompts bypassed for this repo"
+fi
 cat <<EOF
 
 ✓ Agent MCP wiring done.
@@ -149,6 +199,7 @@ cat <<EOF
   Broker URL:       $BROKER_URL
   Agent identity:   $AGENT_NAME
   Model declared:   ${MODEL:-(none — gen-key default will apply)}
+${WORKER_LINE}
 
 Next steps:
   1. **Restart your Claude Code session** — MCP servers only load at startup.
