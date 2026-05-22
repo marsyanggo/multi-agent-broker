@@ -80,6 +80,7 @@ Phase 1 鎖定最小可運行核心：**agent + message + task**。先把兩台 
 - [x] **D4d.** Cross-machine demo：Mac 端 Claude Code `send_message` / `create_task` 跑通對 broker 的完整 lifecycle
 - [x] **D5.** 修 `install.sh` / `deploy/README.md` — gen-key 範例帶上 `MAB_DB_PATH`，避免 broker 跟 gen-key 寫到不同 DB
 - [x] **D6.** `deploy/update.sh` — 一鍵更新（dirty-tree guard + ff-only + uv sync + systemctl restart + /health 等待 + rollback hint）
+- [x] **D7.** `deploy/setup-agent.sh` — 一鍵把 Claude Code 接上 broker（probe /health + 驗 key + `claude mcp add` 或 JSON 直編，含 backup）；install.sh 結尾 + deploy/README 補對應段落
 
 ---
 

@@ -36,14 +36,17 @@ uv run mab-broker serve         # listens on 0.0.0.0:8420
 For a production-style install with systemd user service (Linux), use the one-shot installer:
 
 ```bash
-./deploy/install.sh             # one sudo step for loginctl enable-linger; rest non-sudo
-systemctl --user status mab-broker
+./deploy/install.sh             # broker: install + start (one sudo for enable-linger)
+./deploy/setup-agent.sh         #   ↓ wire Claude Code as an agent (any host)
+    --broker-url http://broker-host:8420 \
+    --api-key   mab-ak-XXXX \
+    --model     claude-opus-4-7
 
-./deploy/update.sh              # pull + sync + restart + /health verify (no sudo)
-./deploy/uninstall.sh           # remove unit, keep DB
+./deploy/update.sh              # broker: pull + sync + restart + /health verify
+./deploy/uninstall.sh           # broker: remove unit, keep DB
 ```
 
-`update.sh` refuses to run on a dirty tree and uses `git pull --ff-only`, so it never overwrites local commits — safe to run on production hosts unattended. See [`deploy/README.md`](deploy/README.md) for the full flow.
+`update.sh` refuses to run on a dirty tree and uses `git pull --ff-only`, so it never overwrites local commits — safe to run on production hosts unattended. `setup-agent.sh` validates broker reachability + API key before writing MCP config, and creates a backup of `~/.claude.json` on the fallback path. See [`deploy/README.md`](deploy/README.md) for the full flow.
 
 ### Generate an API key per agent
 

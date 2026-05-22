@@ -4,9 +4,10 @@ One-command install + one-command update for a single Linux PC. Runs the broker 
 
 | Action | Command |
 |--------|---------|
-| Install | `./deploy/install.sh` |
-| Update | `./deploy/update.sh` |
-| Uninstall (keeps DB) | `./deploy/uninstall.sh` |
+| Install broker | `./deploy/install.sh` |
+| Wire Claude Code as agent | `./deploy/setup-agent.sh --broker-url ... --api-key ... [--model ...]` |
+| Update broker | `./deploy/update.sh` |
+| Uninstall broker (keeps DB) | `./deploy/uninstall.sh` |
 
 ## Prerequisites
 
@@ -35,6 +36,10 @@ The script is idempotent — re-run it after `git pull` to apply updates without
 
 ## Register an agent
 
+Two halves: **(a) generate a key on the broker host**, and **(b) wire Claude Code on whichever host wants to act as that agent** (could be the same box as the broker, or a remote machine).
+
+### (a) Generate a key (run on broker host)
+
 The installer sets a non-default `MAB_DB_PATH` for the broker (so data sits under XDG, not `~/.multi-agent-broker/`). When you run `gen-key` from the shell, you **must** pass the same env var, or the key is written to a different SQLite file and the broker will reject every connection with `invalid api key`:
 
 ```bash
@@ -42,7 +47,22 @@ MAB_DB_PATH=$HOME/.local/share/multi-agent-broker/db.sqlite \
   /path/to/multi-agent-broker/.venv/bin/mab-broker gen-key --name <agent-name>
 ```
 
-The `install.sh` finish message prints a ready-to-paste version with the correct paths filled in.
+Capture the printed `mab-ak-...` — it's only shown once.
+
+### (b) Wire Claude Code's MCP config (run on the agent host)
+
+Use `setup-agent.sh`. It probes the broker, validates the key, then writes the MCP entry to `~/.claude.json` (via `claude mcp add` if the CLI is on PATH, else direct JSON edit with a backup):
+
+```bash
+./deploy/setup-agent.sh \
+  --broker-url http://192.168.1.100:8420 \
+  --api-key   mab-ak-XXXXXXXXXXXXXXXX \
+  --model     claude-opus-4-7              # optional; auto-derives capability tags
+```
+
+Then **restart Claude Code on that host** — MCP servers only load at session startup. After restart, `claude mcp list` should show `mab: ✓ Connected`, and the `/lead-mode` / `/worker-mode` slash commands become usable.
+
+`setup-agent.sh` is safe to re-run (idempotent) and never touches the broker DB — it only manipulates the local Claude config.
 
 ## Day-to-day ops
 

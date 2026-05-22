@@ -110,30 +110,42 @@ cat <<EOF
 
   Service:   systemctl --user status mab-broker
   Logs:      journalctl --user -u mab-broker -f
+  Update:    ./deploy/update.sh                       (pull + sync + restart)
   Restart:   systemctl --user restart mab-broker
   Health:    curl http://127.0.0.1:${PORT}/health
   Listen on: http://${LAN_IP}:${PORT}  (LAN-accessible)
 
-To register an agent and print its API key (MAB_DB_PATH must match the unit so
-the key lands in the same SQLite file the broker reads):
+──────── Register THIS host as an agent (optional) ────────
 
-  MAB_DB_PATH=$DATA_DIR/db.sqlite $REPO_ROOT/.venv/bin/mab-broker gen-key --name <agent-name>
+Run on this box if you also want it to participate as a Claude Code agent.
+MAB_DB_PATH must match the unit so the key lands in the same SQLite the
+broker reads:
 
-On the agent machine, add to its .mcp.json:
+  MAB_DB_PATH=$DATA_DIR/db.sqlite \\
+    $REPO_ROOT/.venv/bin/mab-broker gen-key --name <agent-name>
 
-  {
-    "mcpServers": {
-      "mab": {
-        "command": "$REPO_ROOT/.venv/bin/mab-agent",
-        "args": [
-          "--broker-url", "http://${LAN_IP}:${PORT}",
-          "--api-key", "<paste-key-here>"
-        ]
-      }
-    }
-  }
+Then wire Claude Code's MCP config in one step:
 
-Firewall (open port if blocked):
+  $REPO_ROOT/deploy/setup-agent.sh \\
+      --broker-url http://localhost:${PORT} \\
+      --api-key <paste-key-here> \\
+      --model claude-opus-4-7    # or whatever model this host runs
+
+──────── Register a REMOTE host as an agent ────────
+
+On the broker host, generate a key as above, then on the remote box:
+
+  git clone <repo-url>
+  cd multi-agent-broker && uv sync
+  ./deploy/setup-agent.sh \\
+      --broker-url http://${LAN_IP}:${PORT} \\
+      --api-key <paste-key-here> \\
+      --model <model-name>
+
+Restart Claude Code on each agent host afterwards (MCP loads at startup).
+
+──────── Firewall (if blocked) ────────
+
   sudo ufw allow ${PORT}                                                              # Debian/Ubuntu
   sudo firewall-cmd --permanent --add-port=${PORT}/tcp && sudo firewall-cmd --reload  # Fedora/RHEL
 EOF
