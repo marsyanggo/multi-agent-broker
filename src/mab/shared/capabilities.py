@@ -99,12 +99,20 @@ def derive_capabilities_from_model(model: str) -> list[str]:
 
     tags: list[str] = [f"model:{model}"]
 
-    # Ollama-tag form (e.g. "gpt-oss:20b", "llama3.3:70b", "qwen2.5-coder:32b")
-    # — split off the size/variant and assume Ollama hosting.
+    # Ollama-tag form (e.g. "gpt-oss:20b", "llama3.3:70b", "qwen2.5-coder:32b",
+    # "gpt-oss:120b-cloud") — split off the size/variant and assume Ollama
+    # hosting. `-cloud` suffix marks Ollama Cloud variants (vs. local GPU host).
     if ":" in model:
-        name, size = model.split(":", 1)
-        if size:
-            tags.append(f"size:{size}")
+        name, raw_tag = model.split(":", 1)
+        if raw_tag:
+            if raw_tag.endswith("-cloud"):
+                base_tag = raw_tag[:-len("-cloud")]
+                if base_tag:
+                    tags.append(f"size:{base_tag}")
+                tags.append("host:cloud")
+            else:
+                tags.append(f"size:{raw_tag}")
+                tags.append("host:local")
             tags.append("provider:ollama")
         match_key = name
     else:

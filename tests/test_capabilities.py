@@ -81,7 +81,22 @@ def test_derive_capabilities_gpt_oss_via_ollama() -> None:
     assert "family:gpt-oss" in tags
     assert "tier:reasoning" in tags
     assert "size:20b" in tags
+    assert "host:local" in tags
     assert "provider:ollama" in tags
+
+
+def test_derive_capabilities_ollama_cloud_variant() -> None:
+    # Ollama Cloud uses a `-cloud` suffix on the tag. We split that out so
+    # routing on size:* doesn't end up with a polluted "120b-cloud" value.
+    tags = derive_capabilities_from_model("gpt-oss:120b-cloud")
+    assert "model:gpt-oss:120b-cloud" in tags
+    assert "family:gpt-oss" in tags
+    assert "tier:reasoning" in tags
+    assert "size:120b" in tags
+    assert "host:cloud" in tags
+    assert "provider:ollama" in tags
+    # No raw "size:120b-cloud" leaking through.
+    assert "size:120b-cloud" not in tags
 
 
 def test_derive_capabilities_llama_via_ollama() -> None:
@@ -124,6 +139,7 @@ def test_derive_capabilities_unknown_ollama_tag_still_gets_size() -> None:
     assert tags == [
         "model:custom-finetune:13b",
         "size:13b",
+        "host:local",
         "provider:ollama",
     ]
 

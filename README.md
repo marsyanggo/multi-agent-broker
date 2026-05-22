@@ -200,16 +200,20 @@ Tags follow a `prefix:value` convention (with bare tags also allowed). The match
 
 - **Closed-API**: Claude (opus / sonnet / haiku), GPT (4 / 4o / 5), Gemini (pro / flash / flash-lite) — full `family:` + `tier:` + `provider:`
 - **Open-source (Anthropic / Meta / Alibaba / DeepSeek / Microsoft / Mistral / OpenAI OSS / Google Gemma)**: `gpt-oss`, `llama / llama-3 / llama-3.3 / llama-4`, `qwen / qwen2.5 / qwen2.5-coder / qwen3`, `deepseek / deepseek-r1 / deepseek-v3 / deepseek-coder`, `mistral / mistral-large / mistral-small`, `gemma / gemma-3`, `phi / phi-4` — `family:` + `tier:` (provider intentionally not auto-set since these can be hosted via Ollama, vLLM, Bedrock, etc.)
-- **Ollama tag form `name:tag`** (e.g. `gpt-oss:20b`, `llama3.3:70b`, `qwen2.5-coder:32b`): auto-adds `size:<tag>` and `provider:ollama`, since Ollama is the most common local-host runtime for `:tag`-pinned variants. Pass `--capabilities` to override provider if you're running through vLLM / something else.
+- **Ollama tag form `name:tag`** (e.g. `gpt-oss:20b`, `llama3.3:70b`, `qwen2.5-coder:32b`): auto-adds `size:<tag>`, `host:local`, and `provider:ollama`. The `-cloud` suffix (e.g. `gpt-oss:120b-cloud`) is recognised as Ollama Cloud: `size:120b` + `host:cloud` instead of polluting the size tag. Pass `--capabilities` to override provider if you're running through vLLM / something else.
 
 Unknown model strings only get `model:X` (+ `size:` / `provider:ollama` if `:tag` form). Anything richer should be passed via `--capabilities`.
 
-Example:
+Examples:
 
 ```bash
 mab-agent --broker-url ... --api-key ... --model gpt-oss:20b
-# → capabilities = [model:gpt-oss:20b, size:20b, provider:ollama,
-#                   family:gpt-oss, tier:reasoning]
+# → [model:gpt-oss:20b, size:20b, host:local, provider:ollama,
+#    family:gpt-oss, tier:reasoning]
+
+mab-agent --broker-url ... --api-key ... --model gpt-oss:120b-cloud
+# → [model:gpt-oss:120b-cloud, size:120b, host:cloud, provider:ollama,
+#    family:gpt-oss, tier:reasoning]
 ```
 
 ### How an agent declares its model

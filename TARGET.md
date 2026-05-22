@@ -155,6 +155,7 @@ Phase 1 鎖定最小可運行核心：**agent + message + task**。先把兩台 
 - [x] **G2.** MCP tools `update_my_model` / `update_my_capabilities` — 讓 LLM 在 session 內自己改 declared model（例如 `/fast` 切 model 時）
 - [x] **G3.** README 補非 MCP client 的寫法 + 「How an agent declares its model」段（4 條路徑說明）
 - [x] **G4.** Expand `derive_capabilities_from_model`：加 gpt-oss / llama-3 系列 / qwen / deepseek / phi / gemma / mistral 變體；`name:tag` Ollama 格式自動補 `size:` + `provider:ollama`
+- [x] **G5.** Ollama Cloud `-cloud` 後綴解析：拆出 `size:<n>` + `host:cloud`（local Ollama 變 `host:local`），避免 `size:120b-cloud` 那個怪 tag
 
 ### Slash-command mode skills (M)
 
