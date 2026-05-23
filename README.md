@@ -4,7 +4,7 @@
 
 Spin up the broker on any reachable host, register one API key per agent, and Claude Code / Gemini CLI instances on separate boxes can list each other, exchange direct messages, and pass tasks back and forth. Tasks can require specific model capabilities (e.g. `tier:opus`, `family:claude`, `vision`) so high-stakes work only goes to agents that can handle it. Claude Code integration ships today via MCP stdio; REST + WebSocket are open for any other language or LLM framework to plug in.
 
-> **Status:** Phase 1 (core) + Phase 1.5 (deployment) + Phase 2.1 (capability routing) + Phase 2.2 (task delete + observability) + Phase 3a Roster + **Phase 3 worker daemon SDK** complete. 154 tests, real-subprocess end-to-end demos, one-shot installers for both broker and worker hosts, live cross-machine multi-LLM proof: claude-mac (Opus via Anthropic API) as lead orchestrates worker-gpt-oss-cloud (gpt-oss:120b via Ollama Cloud) running as a headless `mab-worker` systemd daemon — push-driven task routing settles in ~1 second end-to-end (broker push + daemon claim + Ollama inference + result write-back). Task dependencies / channels / shared context still pending.
+> **Status:** Phase 1 (core) + Phase 1.5 (deployment) + Phase 2.1 (capability routing) + Phase 2.2 (task delete + observability) + Phase 3a Roster + **Phase 3 worker daemon SDK** complete. 158 tests, real-subprocess end-to-end demos, one-shot installers for both broker and worker hosts, live cross-machine multi-LLM proof: claude-mac (Opus via Anthropic API) as lead orchestrates worker-gpt-oss-cloud (gpt-oss:120b via Ollama Cloud) running as a headless `mab-worker` systemd daemon — push-driven task routing settles in ~1 second end-to-end (broker push + daemon claim + Ollama inference + result write-back). Task dependencies / channels / shared context still pending.
 
 ---
 
@@ -369,7 +369,7 @@ CLI flags on `mab-agent` mirror the env vars; CLI takes precedence.
 
 ```bash
 uv run pytest
-# 154 tests, ~35s — includes real-subprocess end-to-end demo + live-broker daemon integration
+# 158 tests, ~35s — includes real-subprocess end-to-end demo + live-broker daemon integration
 ```
 
 Test layout:
@@ -390,6 +390,7 @@ Test layout:
 | `tests/worker/test_ollama_adapter.py` | OllamaAdapter against `httpx.MockTransport`: local no-auth, cloud bearer, system prompt, response trim, HTTP error, malformed response |
 | `tests/worker/test_claude_cli_adapter.py` | ClaudeCLIAdapter with a temp Python shim mimicking `claude` CLI: version probe, model + flag wiring, prompt template, exit code mapping, empty stdout, subprocess kill on cancel, extra args |
 | `tests/worker/test_cli.py` | `mab-worker` CLI: parse_capabilities, build_adapter for each of 4 adapters, env-var defaults, required-flag validation |
+| `tests/worker/test_e2e_daemon.py` | End-to-end daemon scenarios: capability-rejected claim, push-after-catchup (true push path), graceful stop mid-task, 10-task burst |
 
 ---
 

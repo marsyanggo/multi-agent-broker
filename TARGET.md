@@ -202,7 +202,7 @@ Phase 1 鎖定最小可運行核心：**agent + message + task**。先把兩台 
 - [x] **F6.** `mab-worker` CLI + pyproject script entry — per-adapter flag groups、env var defaults、required-flag validation + 13 tests _(commit `8a5da71`)_
 - [x] **F7.** `deploy/setup-worker.sh` — 一鍵裝 daemon + 寫 systemd unit (chmod 600)、validate broker + key、poll for online、idempotent re-run、`--name` 多 worker per host _(commit `361d765`)_
 - [x] **F8.** README + skill + TARGET 完整 update for Phase 3：3-role architecture diagram、Quickstart 多 daemon 區塊、roadmap tick、test layout 完整
-- [ ] **F9.** End-to-end demo test：daemon + live broker + MockAdapter，多 task lifecycle 走完整 push-driven loop
+- [x] **F9.** End-to-end demo tests — 4 個新 scenarios 覆蓋 unit tests 沒 cover 的路徑：cap-rejected claim、push-after-catchup（真正的 wait_for_task push path）、graceful stop mid-task、10-task burst throughput
 
 ### Production verification
 
