@@ -570,10 +570,10 @@ function renderTaskGraph(snapshot) {
   const maxRows = Math.max(...layers.map(l => l.length));
 
   // Geometry constants
-  const BOX_W = 66;
-  const BOX_H = 16;
-  const H_GAP = 15;
-  const V_GAP = 4;
+  const BOX_W = 50;
+  const BOX_H = 12;
+  const H_GAP = 12;
+  const V_GAP = 3;
 
   const totalWidth = layers.length * (BOX_W + H_GAP) - H_GAP;
   const totalHeight = maxRows * (BOX_H + V_GAP) - V_GAP;
@@ -646,12 +646,12 @@ function renderTaskGraph(snapshot) {
       txt.setAttribute("x", x + BOX_W / 2);
       txt.setAttribute("y", y + BOX_H / 2);
       txt.setAttribute("font-family", "monospace");
-      txt.setAttribute("font-size", "7");
+      txt.setAttribute("font-size", "6");
       txt.setAttribute("fill", "#c9d1d9");
       txt.setAttribute("text-anchor", "middle");
       txt.setAttribute("dominant-baseline", "middle");
       let disp = t.title || "";
-      if (disp.length > 9) disp = disp.slice(0, 9) + "…";
+      if (disp.length > 7) disp = disp.slice(0, 7) + "…";
       txt.textContent = disp;
 
       svg.appendChild(rect);
