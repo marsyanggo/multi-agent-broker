@@ -14,9 +14,9 @@
     html, body {
       height: 100%;
       overflow: hidden;
-      font-family: "Courier New", Courier, monospace;
-      color: #535353;
-      background: #fff;
+      font-family: "SF Mono", Menlo, Monaco, Consolas, "Courier New", monospace;
+      color: #c9d1d9;
+      background: #0d1117;
     }
 
     body {
@@ -29,31 +29,32 @@
     #dashboard-header {
       display: flex;
       align-items: center;
-      height: 50px;
-      padding: 0 16px;
-      gap: 8px;
-      border-bottom: 1px solid #ccc;
+      height: 44px;
+      padding: 0 14px;
+      gap: 10px;
+      border-bottom: 1px solid #30363d;
       flex-shrink: 0;
-      background: #fff;
+      background: #161b22;
     }
 
     #dashboard-title {
-      font-size: 14px;
+      font-size: 13px;
       font-weight: bold;
-      letter-spacing: 0.06em;
+      letter-spacing: 0.1em;
       margin-right: 8px;
       white-space: nowrap;
+      color: #79c0ff;
     }
 
     #ws-status {
       font-size: 18px;
       line-height: 1;
-      color: #999;
+      color: #8b949e;
       flex-shrink: 0;
     }
 
-    #ws-status.ws-connected    { color: #2ecc71; }
-    #ws-status.ws-disconnected { color: #999;    }
+    #ws-status.ws-connected    { color: #3fb950; text-shadow: 0 0 8px #3fb950; }
+    #ws-status.ws-disconnected { color: #8b949e; text-shadow: none; }
 
     #ws-status-text {
       font-size: 12px;
@@ -77,14 +78,14 @@
       grid-template-areas:
         "tasks   agents   channels"
         "tasks   graph    contexts";
-      background: #ccc;
+      background: #30363d;
       gap: 1px;
     }
 
     /* ── Panels ── */
 
     .panel {
-      background: #fff;
+      background: #0d1117;
       display: flex;
       flex-direction: column;
       overflow: hidden;
@@ -95,11 +96,12 @@
       font-size: 10px;
       font-weight: bold;
       text-transform: uppercase;
-      letter-spacing: 0.08em;
-      padding: 4px 8px;
-      border-bottom: 1px solid #ccc;
+      letter-spacing: 0.12em;
+      padding: 5px 10px;
+      border-bottom: 1px solid #30363d;
       flex-shrink: 0;
-      color: #535353;
+      color: #79c0ff;
+      background: #161b22;
     }
 
     .panel > div:not(.filter-bar) {
@@ -113,7 +115,7 @@
     .filter-bar {
       flex: 0 0 auto;
       padding: 3px 8px;
-      border-bottom: 1px solid #ccc;
+      border-bottom: 1px solid #30363d;
       font-size: 11px;
       overflow: hidden;
     }
@@ -136,12 +138,12 @@
 
     /* ── Status classes (consumed by injected panel JS) ── */
 
-    .ws-connected    { color: #2ecc71; }
-    .ws-disconnected { color: #999;    }
+    .ws-connected    { color: #3fb950; }
+    .ws-disconnected { color: #8b949e;    }
 
-    .status-idle    { color: #2ecc71; }
-    .status-busy    { color: #f39c12; }
-    .status-offline { color: #999;    }
+    .status-idle    { color: #3fb950; }
+    .status-busy    { color: #d29922; }
+    .status-offline { color: #8b949e;    }
   </style>
 </head>
 <body>
@@ -192,7 +194,7 @@ function renderAgentsPanel(snapshot) {
 
   if (!snapshot.agents || snapshot.agents.length === 0) {
     const empty = document.createElement('div');
-    empty.style.cssText = 'color:#999;font-style:italic;';
+    empty.style.cssText = 'color:#8b949e;font-style:italic;';
     empty.textContent = '(no agents)';
     container.appendChild(empty);
     return;
@@ -214,14 +216,14 @@ function renderAgentsPanel(snapshot) {
   }
 
   function dotColor(agent) {
-    if (agent.is_stale || agent.status === 'offline') return '#999';
-    if (agent.status === 'busy') return '#f39c12';
-    return '#2ecc71';
+    if (agent.is_stale || agent.status === 'offline') return '#8b949e';
+    if (agent.status === 'busy') return '#d29922';
+    return '#3fb950';
   }
 
   snapshot.agents.forEach((agent, i) => {
     const row = document.createElement('div');
-    row.style.cssText = 'display:flex;gap:6px;align-items:baseline;padding:2px 0;border-bottom:1px solid #eee;';
+    row.style.cssText = 'display:flex;gap:6px;align-items:baseline;padding:2px 0;border-bottom:1px solid #21262d;';
 
     const dot = document.createElement('span');
     dot.style.cssText = 'font-size:11px;color:' + dotColor(agent) + ';';
@@ -232,15 +234,15 @@ function renderAgentsPanel(snapshot) {
     name.textContent = agent.name;
 
     const tag = document.createElement('span');
-    tag.style.cssText = 'font-size:11px;color:#777;';
+    tag.style.cssText = 'font-size:11px;color:#7d8590;';
     tag.textContent = extractTag(agent.capabilities);
 
     const statusSpan = document.createElement('span');
-    statusSpan.style.cssText = 'font-size:11px;color:' + (agent.current_task ? '#e67e22' : '#999') + ';';
+    statusSpan.style.cssText = 'font-size:11px;color:' + (agent.current_task ? '#d29922' : '#8b949e') + ';';
     statusSpan.textContent = agent.current_task ? 'working' : 'idle';
 
     const hb = document.createElement('span');
-    hb.style.cssText = 'margin-left:auto;font-size:11px;color:#999;';
+    hb.style.cssText = 'margin-left:auto;font-size:11px;color:#8b949e;';
     hb.textContent = formatAge(agent.last_heartbeat_age_seconds, agent.is_stale);
 
     row.appendChild(dot);
@@ -260,25 +262,26 @@ const expandedTasks = new Set();
 let _tasks = [];
 
 const _STATUS_COLORS = {
-  pending: '#3498db',
-  assigned: '#f39c12',
-  in_progress: '#f39c12',
-  completed: '#2ecc71',
-  failed: '#e74c3c',
-  blocked: '#999',
+  pending: '#58a6ff',
+  assigned: '#d29922',
+  in_progress: '#d29922',
+  completed: '#3fb950',
+  failed: '#f85149',
+  blocked: '#8b949e',
 };
 
 const _FILTER_ORDER = ['all', 'pending', 'blocked', 'in_progress', 'completed', 'failed'];
 
 function _applyBtnStyle(btn, active) {
-  btn.style.background = active ? '#535353' : '#fff';
-  btn.style.color = active ? '#fff' : '#535353';
-  btn.style.border = '1px solid ' + (active ? '#535353' : '#ccc');
+  btn.style.background = active ? '#1f6feb' : '#161b22';
+  btn.style.color = active ? '#fff' : '#c9d1d9';
+  btn.style.borderColor = active ? '#1f6feb' : '#30363d';
+  // border set above with borderColor
 }
 
 function _buildDetailPanel(task) {
   const panel = document.createElement('div');
-  panel.style.cssText = 'padding:8px 12px;background:#f9f9f9;border-bottom:1px solid #eee;font-size:12px;line-height:1.5;';
+  panel.style.cssText = 'padding:8px 12px;background:#f9f9f9;border-bottom:1px solid #21262d;font-size:12px;line-height:1.5;';
 
   if (task.description) {
     const descDiv = document.createElement('div');
@@ -293,7 +296,7 @@ function _buildDetailPanel(task) {
       const toggle = document.createElement('a');
       toggle.href = '#';
       toggle.textContent = 'show more';
-      toggle.style.cssText = 'color:#3498db;cursor:pointer;';
+      toggle.style.cssText = 'color:#58a6ff;cursor:pointer;';
       toggle.addEventListener('click', e => {
         e.preventDefault();
         e.stopPropagation();
@@ -347,7 +350,7 @@ function _renderList(tasks) {
 
   if (tasks.length === 0) {
     const msg = document.createElement('div');
-    msg.style.cssText = 'color:#999;font-style:italic;padding:8px 0;';
+    msg.style.cssText = 'color:#8b949e;font-style:italic;padding:8px 0;';
     msg.textContent = '(no tasks yet)';
     container.appendChild(msg);
     return;
@@ -359,7 +362,7 @@ function _renderList(tasks) {
 
   if (filtered.length === 0) {
     const msg = document.createElement('div');
-    msg.style.cssText = 'color:#999;font-style:italic;padding:8px 0;';
+    msg.style.cssText = 'color:#8b949e;font-style:italic;padding:8px 0;';
     msg.textContent = '(no tasks match "' + currentFilter + '")';
     container.appendChild(msg);
     return;
@@ -371,11 +374,11 @@ function _renderList(tasks) {
     const wrapper = document.createElement('div');
 
     const row = document.createElement('div');
-    row.style.cssText = 'display:flex;align-items:center;gap:8px;padding:6px;border-bottom:1px solid #eee;cursor:pointer;user-select:none;';
+    row.style.cssText = 'display:flex;align-items:center;gap:8px;padding:6px;border-bottom:1px solid #21262d;cursor:pointer;user-select:none;';
 
     const badge = document.createElement('span');
     badge.textContent = task.status.toUpperCase();
-    badge.style.cssText = 'background:' + (_STATUS_COLORS[task.status] || '#999') + ';color:#fff;font-size:9px;padding:2px 6px;border-radius:3px;font-weight:bold;white-space:nowrap;';
+    badge.style.cssText = 'background:' + (_STATUS_COLORS[task.status] || '#8b949e') + ';color:#fff;font-size:9px;padding:2px 6px;border-radius:3px;font-weight:bold;white-space:nowrap;';
     row.appendChild(badge);
 
     const shortId = document.createElement('span');
@@ -391,7 +394,7 @@ function _renderList(tasks) {
     if (task.depends_on && task.depends_on.length > 0) {
       const deps = document.createElement('span');
       deps.textContent = '\u21E0' + task.depends_on.length;
-      deps.style.cssText = 'font-size:11px;color:#999;white-space:nowrap;';
+      deps.style.cssText = 'font-size:11px;color:#8b949e;white-space:nowrap;';
       row.appendChild(deps);
     }
 
@@ -518,7 +521,7 @@ function renderTaskGraph(snapshot) {
     const msg = document.createElementNS(SVG_NS, "text");
     msg.setAttribute("x", "10");
     msg.setAttribute("y", "20");
-    msg.setAttribute("fill", "#999");
+    msg.setAttribute("fill", "#8b949e");
     msg.setAttribute("font-style", "italic");
     msg.textContent = "(no task graph to show)";
     svg.appendChild(msg);
@@ -567,10 +570,10 @@ function renderTaskGraph(snapshot) {
   const maxRows = Math.max(...layers.map(l => l.length));
 
   // Geometry constants
-  const BOX_W = 88;
-  const BOX_H = 22;
-  const H_GAP = 20;
-  const V_GAP = 5;
+  const BOX_W = 66;
+  const BOX_H = 16;
+  const H_GAP = 15;
+  const V_GAP = 4;
 
   const totalWidth = layers.length * (BOX_W + H_GAP) - H_GAP;
   const totalHeight = maxRows * (BOX_H + V_GAP) - V_GAP;
@@ -590,7 +593,7 @@ function renderTaskGraph(snapshot) {
   marker.setAttribute("orient", "auto");
   const arrowPath = document.createElementNS(SVG_NS, "path");
   arrowPath.setAttribute("d", "M0,-5L10,0L0,5");
-  arrowPath.setAttribute("fill", "#999");
+  arrowPath.setAttribute("fill", "#8b949e");
   marker.appendChild(arrowPath);
   defs.appendChild(marker);
   svg.appendChild(defs);
@@ -599,18 +602,18 @@ function renderTaskGraph(snapshot) {
   function styleFor(status) {
     switch (status) {
       case "pending":
-        return { fill: "white", stroke: "#3498db" };
+        return { fill: "white", stroke: "#58a6ff" };
       case "assigned":
       case "in_progress":
-        return { fill: "#fef3e0", stroke: "#f39c12" };
+        return { fill: "#2c1e0a", stroke: "#d29922" };
       case "completed":
-        return { fill: "#e8f8e8", stroke: "#2ecc71" };
+        return { fill: "#0f2818", stroke: "#3fb950" };
       case "failed":
-        return { fill: "#fde8e8", stroke: "#e74c3c" };
+        return { fill: "#2a0f0f", stroke: "#f85149" };
       case "blocked":
-        return { fill: "#eee", stroke: "#999" };
+        return { fill: "#21262d", stroke: "#8b949e" };
       default:
-        return { fill: "#fff", stroke: "#535353" };
+        return { fill: "#161b22", stroke: "#58a6ff" };
     }
   }
 
@@ -643,12 +646,12 @@ function renderTaskGraph(snapshot) {
       txt.setAttribute("x", x + BOX_W / 2);
       txt.setAttribute("y", y + BOX_H / 2);
       txt.setAttribute("font-family", "monospace");
-      txt.setAttribute("font-size", "9");
-      txt.setAttribute("fill", "#535353");
+      txt.setAttribute("font-size", "7");
+      txt.setAttribute("fill", "#c9d1d9");
       txt.setAttribute("text-anchor", "middle");
       txt.setAttribute("dominant-baseline", "middle");
       let disp = t.title || "";
-      if (disp.length > 12) disp = disp.slice(0, 12) + "…";
+      if (disp.length > 9) disp = disp.slice(0, 9) + "…";
       txt.textContent = disp;
 
       svg.appendChild(rect);
@@ -670,7 +673,7 @@ function renderTaskGraph(snapshot) {
       line.setAttribute("y1", srcPos.y + BOX_H / 2);
       line.setAttribute("x2", targetPos.x);
       line.setAttribute("y2", targetPos.y + BOX_H / 2);
-      line.setAttribute("stroke", "#999");
+      line.setAttribute("stroke", "#8b949e");
       line.setAttribute("stroke-width", "1");
       line.setAttribute("marker-end", "url(#arrow)");
       svg.appendChild(line);
@@ -705,7 +708,7 @@ function renderChannelsPanel(snapshot) {
 
   if (channels.length === 0) {
     const empty = document.createElement('div');
-    empty.style.cssText = 'font-style:italic;color:#999;font-size:12px;padding:6px 0;';
+    empty.style.cssText = 'font-style:italic;color:#8b949e;font-size:12px;padding:6px 0;';
     empty.textContent = '(no channels)';
     container.appendChild(empty);
     return;
@@ -715,7 +718,7 @@ function renderChannelsPanel(snapshot) {
     const { channel, member_count, message_count } = item;
 
     const row = document.createElement('div');
-    row.style.cssText = 'border-bottom:1px solid #eee;padding:6px 0;font-size:12px;';
+    row.style.cssText = 'border-bottom:1px solid #21262d;padding:6px 0;font-size:12px;';
 
     const line1 = document.createElement('div');
     line1.style.cssText = 'display:flex;justify-content:space-between;align-items:baseline;';
@@ -725,7 +728,7 @@ function renderChannelsPanel(snapshot) {
     nameEl.textContent = `#${channel.name}`;
 
     const metaEl = document.createElement('span');
-    metaEl.style.cssText = 'color:#999;font-size:11px;white-space:nowrap;margin-left:8px;';
+    metaEl.style.cssText = 'color:#8b949e;font-size:11px;white-space:nowrap;margin-left:8px;';
     metaEl.textContent = `${member_count} members · ${message_count} msgs`;
 
     line1.appendChild(nameEl);
@@ -734,7 +737,7 @@ function renderChannelsPanel(snapshot) {
 
     if (channel.description) {
       const line2 = document.createElement('div');
-      line2.style.cssText = 'font-size:11px;color:#999;font-style:italic;margin-top:2px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;';
+      line2.style.cssText = 'font-size:11px;color:#8b949e;font-style:italic;margin-top:2px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;';
       const desc = channel.description.length > 80
         ? channel.description.slice(0, 80) + '…'
         : channel.description;
@@ -757,7 +760,7 @@ function renderContextsPanel(snapshot) {
 
   if (contexts.length === 0) {
     const empty = document.createElement('div');
-    empty.style.cssText = 'font-style:italic;color:#999;font-size:12px;padding:6px 0;';
+    empty.style.cssText = 'font-style:italic;color:#8b949e;font-size:12px;padding:6px 0;';
     empty.textContent = '(no contexts)';
     container.appendChild(empty);
     return;
@@ -765,7 +768,7 @@ function renderContextsPanel(snapshot) {
 
   for (const ctx of contexts) {
     const wrapper = document.createElement('div');
-    wrapper.style.cssText = 'border-bottom:1px solid #eee;';
+    wrapper.style.cssText = 'border-bottom:1px solid #21262d;';
 
     const row = document.createElement('div');
     row.style.cssText = 'padding:6px 0;font-size:12px;cursor:pointer;';
@@ -778,7 +781,7 @@ function renderContextsPanel(snapshot) {
     nameEl.textContent = ctx.name;
 
     const sizeEl = document.createElement('span');
-    sizeEl.style.cssText = 'color:#999;font-size:11px;white-space:nowrap;margin-left:8px;';
+    sizeEl.style.cssText = 'color:#8b949e;font-size:11px;white-space:nowrap;margin-left:8px;';
     sizeEl.textContent = `${formatSize(ctx.content.length)} chars`;
 
     line1.appendChild(nameEl);
@@ -786,7 +789,7 @@ function renderContextsPanel(snapshot) {
     row.appendChild(line1);
 
     const line2 = document.createElement('div');
-    line2.style.cssText = 'font-size:11px;color:#999;margin-top:2px;';
+    line2.style.cssText = 'font-size:11px;color:#8b949e;margin-top:2px;';
     line2.textContent = `${ctx.content_type} · created ${relativeTime(ctx.created_at)}`;
     row.appendChild(line2);
 
@@ -798,7 +801,7 @@ function renderContextsPanel(snapshot) {
     }
 
     const preview = document.createElement('pre');
-    preview.style.cssText = 'white-space:pre-wrap;font-size:11px;font-family:monospace;background:#f8f8f8;padding:8px;margin:0 0 4px 0;display:none;overflow:auto;';
+    preview.style.cssText = 'white-space:pre-wrap;font-size:11px;font-family:monospace;background:#161b22;padding:8px;margin:0 0 4px 0;display:none;overflow:auto;';
     preview.textContent = ctx.content.slice(0, 200);
 
     if (_expandedContextIds.has(ctx.id)) {
