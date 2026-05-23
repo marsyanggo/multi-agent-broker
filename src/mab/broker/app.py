@@ -9,7 +9,7 @@ from fastapi import FastAPI
 
 from mab.broker.config import settings
 from mab.broker.db import Database
-from mab.broker.routes import agents, messages, tasks
+from mab.broker.routes import agents, contexts, messages, tasks
 from mab.broker.websocket import WebSocketHub, router as ws_router
 
 log = logging.getLogger("mab.app")
@@ -54,6 +54,7 @@ app = FastAPI(title="multi-agent-broker", version="0.1.0", lifespan=lifespan)
 app.include_router(agents.router)
 app.include_router(messages.router)
 app.include_router(tasks.router)
+app.include_router(contexts.router)
 app.include_router(ws_router)
 
 

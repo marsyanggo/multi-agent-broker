@@ -12,6 +12,7 @@ from mab.shared.models import (
     Agent,
     AgentSnapshot,
     AgentStatus,
+    Context,
     ContentType,
     Message,
     Task,
@@ -343,6 +344,73 @@ class BrokerClient:
 
     async def delete_task(self, task_id: str) -> None:
         r = await self._http.delete(f"/api/v1/tasks/{task_id}")
+        r.raise_for_status()
+
+    # --- Contexts ---
+
+    async def create_context(
+        self,
+        *,
+        name: str,
+        content: str,
+        content_type: ContentType = "text/markdown",
+        task_id: str | None = None,
+    ) -> Context:
+        body: dict[str, Any] = {
+            "name": name,
+            "content": content,
+            "content_type": content_type,
+        }
+        if task_id:
+            body["task_id"] = task_id
+        r = await self._http.post("/api/v1/contexts", json=body)
+        r.raise_for_status()
+        return Context.model_validate(r.json())
+
+    async def list_contexts(
+        self,
+        *,
+        name: str | None = None,
+        created_by: str | None = None,
+        task_id: str | None = None,
+        limit: int = 100,
+    ) -> list[Context]:
+        params: dict[str, Any] = {"limit": limit}
+        if name:
+            params["name"] = name
+        if created_by:
+            params["created_by"] = created_by
+        if task_id:
+            params["task_id"] = task_id
+        r = await self._http.get("/api/v1/contexts", params=params)
+        r.raise_for_status()
+        return [Context.model_validate(c) for c in r.json()]
+
+    async def get_context(self, context_id: str) -> Context | None:
+        r = await self._http.get(f"/api/v1/contexts/{context_id}")
+        if r.status_code == 404:
+            return None
+        r.raise_for_status()
+        return Context.model_validate(r.json())
+
+    async def update_context(
+        self,
+        context_id: str,
+        *,
+        content: str | None = None,
+        name: str | None = None,
+    ) -> Context:
+        body: dict[str, Any] = {}
+        if content is not None:
+            body["content"] = content
+        if name is not None:
+            body["name"] = name
+        r = await self._http.patch(f"/api/v1/contexts/{context_id}", json=body)
+        r.raise_for_status()
+        return Context.model_validate(r.json())
+
+    async def delete_context(self, context_id: str) -> None:
+        r = await self._http.delete(f"/api/v1/contexts/{context_id}")
         r.raise_for_status()
 
     async def update_task(

@@ -25,6 +25,11 @@ EXPECTED_TOOLS = {
     "delete_task",
     "list_tasks",
     "wait_for_task",
+    "create_context",
+    "list_contexts",
+    "get_context",
+    "update_context",
+    "delete_context",
 }
 
 
@@ -187,6 +192,76 @@ async def test_wait_for_task_drops_non_actionable_echoes(live_broker):
         assert result == {"timeout": True}
     finally:
         await client_a.stop()
+        await srv._client.stop()
+        srv._client = None
+
+
+async def test_create_get_list_context_round_trip(live_broker):
+    url, (key_a, _), _ = live_broker
+    srv._client = BrokerClient(broker_url=url, api_key=key_a)
+    try:
+        await srv._client.start()
+
+        # Create
+        result, _ = _unwrap(
+            await srv.create_context(
+                name="project-spec",
+                content="# Spec\n\nBe terse.",
+            )
+        )
+        ctx_id = result["id"]
+        assert result["name"] == "project-spec"
+        assert result["content_type"] == "text/markdown"
+
+        # Get by id
+        result, _ = _unwrap(await srv.get_context(ctx_id))
+        assert result["content"] == "# Spec\n\nBe terse."
+
+        # List filtered by name
+        result, _ = _unwrap(await srv.list_contexts(name="project-spec"))
+        assert len(result) == 1
+        assert result[0]["id"] == ctx_id
+    finally:
+        await srv._client.stop()
+        srv._client = None
+
+
+async def test_update_context_via_mcp(live_broker):
+    url, (key_a, _), _ = live_broker
+    srv._client = BrokerClient(broker_url=url, api_key=key_a)
+    try:
+        await srv._client.start()
+        result, _ = _unwrap(
+            await srv.create_context(name="draft", content="v1")
+        )
+        ctx_id = result["id"]
+
+        result, _ = _unwrap(
+            await srv.update_context(ctx_id, content="v2 with edits")
+        )
+        assert result["content"] == "v2 with edits"
+        assert result["name"] == "draft"  # name preserved
+    finally:
+        await srv._client.stop()
+        srv._client = None
+
+
+async def test_delete_context_via_mcp(live_broker):
+    url, (key_a, _), _ = live_broker
+    srv._client = BrokerClient(broker_url=url, api_key=key_a)
+    try:
+        await srv._client.start()
+        result, _ = _unwrap(
+            await srv.create_context(name="to-delete", content="x")
+        )
+        ctx_id = result["id"]
+
+        result, _ = _unwrap(await srv.delete_context(ctx_id))
+        assert result == {"deleted": ctx_id}
+
+        result, _ = _unwrap(await srv.get_context(ctx_id))
+        assert result.get("error") == "not found"
+    finally:
         await srv._client.stop()
         srv._client = None
 

@@ -306,6 +306,89 @@ async def wait_for_task(timeout_seconds: int = 60) -> str:
 
 @mcp.tool()
 @_with_pending
+async def create_context(
+    name: str,
+    content: str,
+    content_type: str = "text/markdown",
+    task_id: str | None = None,
+) -> str:
+    """Pin a persistent named document any agent can read.
+
+    Use cases:
+    - Pin a project spec / style guide once, reference by id in many tasks
+    - Auto-promote upstream task results: pass task_id to link the context
+      back to its source task
+    - Long-form context that's awkward to inline in task descriptions
+
+    Returns the new context (incl. id) — save the id to reference later.
+    Names aren't unique; multiple drafts can share a name. Use
+    list_contexts(name="X") to find the latest."""
+    ctx = await _client_or_raise().create_context(
+        name=name,
+        content=content,
+        content_type=content_type,  # type: ignore[arg-type]
+        task_id=task_id,
+    )
+    return _to_json(ctx.model_dump(mode="json"))
+
+
+@mcp.tool()
+@_with_pending
+async def list_contexts(
+    name: str | None = None,
+    created_by: str | None = None,
+    task_id: str | None = None,
+) -> str:
+    """List shared contexts, optionally filtered. Results ordered by
+    updated_at DESC (newest first), so list_contexts(name="X")[0] is
+    the latest version of context named "X"."""
+    ctxs = await _client_or_raise().list_contexts(
+        name=name, created_by=created_by, task_id=task_id
+    )
+    return _to_json([c.model_dump(mode="json") for c in ctxs])
+
+
+@mcp.tool()
+@_with_pending
+async def get_context(context_id: str) -> str:
+    """Read a shared context by id. Returns the full content + metadata."""
+    ctx = await _client_or_raise().get_context(context_id)
+    if ctx is None:
+        return _to_json({"error": "not found", "context_id": context_id})
+    return _to_json(ctx.model_dump(mode="json"))
+
+
+@mcp.tool()
+@_with_pending
+async def update_context(
+    context_id: str,
+    content: str | None = None,
+    name: str | None = None,
+) -> str:
+    """Update a context's content and/or name. Only the creator may update.
+    Pass at least one of content / name. Both fields are individually optional."""
+    try:
+        ctx = await _client_or_raise().update_context(
+            context_id, content=content, name=name
+        )
+    except Exception as e:
+        return _to_json({"error": str(e), "context_id": context_id})
+    return _to_json(ctx.model_dump(mode="json"))
+
+
+@mcp.tool()
+@_with_pending
+async def delete_context(context_id: str) -> str:
+    """Delete a shared context. Only the creator may delete."""
+    try:
+        await _client_or_raise().delete_context(context_id)
+    except Exception as e:
+        return _to_json({"error": str(e), "context_id": context_id})
+    return _to_json({"deleted": context_id})
+
+
+@mcp.tool()
+@_with_pending
 async def list_tasks(
     status: str | None = None,
     assigned_to: str | None = None,

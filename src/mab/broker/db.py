@@ -11,6 +11,7 @@ from mab.shared.capabilities import matches_capabilities
 from mab.shared.models import (
     Agent,
     AgentStatus,
+    Context,
     ContentType,
     Message,
     Task,
@@ -71,6 +72,21 @@ CREATE TABLE IF NOT EXISTS tasks (
 
 CREATE INDEX IF NOT EXISTS idx_tasks_status ON tasks(status);
 CREATE INDEX IF NOT EXISTS idx_tasks_assigned ON tasks(assigned_to, status);
+
+CREATE TABLE IF NOT EXISTS contexts (
+    id TEXT PRIMARY KEY,
+    name TEXT NOT NULL,
+    content TEXT NOT NULL,
+    content_type TEXT NOT NULL DEFAULT 'text/markdown',
+    created_by TEXT NOT NULL,
+    task_id TEXT,
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_contexts_name ON contexts(name);
+CREATE INDEX IF NOT EXISTS idx_contexts_created_by ON contexts(created_by);
+CREATE INDEX IF NOT EXISTS idx_contexts_task_id ON contexts(task_id);
 """
 
 
@@ -106,6 +122,19 @@ def _row_to_message(row: aiosqlite.Row) -> Message:
         created_at=_parse_dt(row["created_at"]),
         delivered=bool(row["delivered"]),
         delivered_at=_parse_dt(row["delivered_at"]),
+    )
+
+
+def _row_to_context(row: aiosqlite.Row) -> Context:
+    return Context(
+        id=row["id"],
+        name=row["name"],
+        content=row["content"],
+        content_type=row["content_type"],
+        created_by=row["created_by"],
+        task_id=row["task_id"],
+        created_at=_parse_dt(row["created_at"]),
+        updated_at=_parse_dt(row["updated_at"]),
     )
 
 
@@ -559,3 +588,108 @@ class Database:
         async with self.conn.execute(sql, vals) as cur:
             rows = await cur.fetchall()
         return [_row_to_task(r) for r in rows]
+
+    # --- Contexts ---
+
+    async def create_context(
+        self,
+        *,
+        name: str,
+        content: str,
+        created_by: str,
+        content_type: ContentType = "text/markdown",
+        task_id: str | None = None,
+    ) -> Context:
+        ctx_id = short_uuid()
+        now = utc_now()
+        await self.conn.execute(
+            """
+            INSERT INTO contexts
+                (id, name, content, content_type, created_by, task_id,
+                 created_at, updated_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                ctx_id,
+                name,
+                content,
+                content_type,
+                created_by,
+                task_id,
+                _iso(now),
+                _iso(now),
+            ),
+        )
+        await self.conn.commit()
+        return Context(
+            id=ctx_id,
+            name=name,
+            content=content,
+            content_type=content_type,
+            created_by=created_by,
+            task_id=task_id,
+            created_at=now,
+            updated_at=now,
+        )
+
+    async def get_context(self, context_id: str) -> Context | None:
+        async with self.conn.execute(
+            "SELECT * FROM contexts WHERE id = ?", (context_id,)
+        ) as cur:
+            row = await cur.fetchone()
+        return _row_to_context(row) if row else None
+
+    async def list_contexts(
+        self,
+        *,
+        name: str | None = None,
+        created_by: str | None = None,
+        task_id: str | None = None,
+        limit: int = 100,
+    ) -> list[Context]:
+        clauses: list[str] = []
+        vals: list[Any] = []
+        if name:
+            clauses.append("name = ?")
+            vals.append(name)
+        if created_by:
+            clauses.append("created_by = ?")
+            vals.append(created_by)
+        if task_id:
+            clauses.append("task_id = ?")
+            vals.append(task_id)
+        where = f"WHERE {' AND '.join(clauses)}" if clauses else ""
+        vals.append(limit)
+        sql = f"SELECT * FROM contexts {where} ORDER BY updated_at DESC LIMIT ?"
+        async with self.conn.execute(sql, vals) as cur:
+            rows = await cur.fetchall()
+        return [_row_to_context(r) for r in rows]
+
+    async def update_context(
+        self,
+        context_id: str,
+        *,
+        content: str | None = None,
+        name: str | None = None,
+    ) -> Context | None:
+        existing = await self.get_context(context_id)
+        if existing is None:
+            return None
+        new_content = content if content is not None else existing.content
+        new_name = name if name is not None else existing.name
+        now = utc_now()
+        await self.conn.execute(
+            "UPDATE contexts SET content = ?, name = ?, updated_at = ? WHERE id = ?",
+            (new_content, new_name, _iso(now), context_id),
+        )
+        await self.conn.commit()
+        return await self.get_context(context_id)
+
+    async def delete_context(self, context_id: str) -> bool:
+        cur = await self.conn.execute(
+            "DELETE FROM contexts WHERE id = ?", (context_id,)
+        )
+        deleted = cur.rowcount > 0
+        await cur.close()
+        await self.conn.commit()
+        return deleted
