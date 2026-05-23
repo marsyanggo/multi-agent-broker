@@ -1,11 +1,35 @@
 # multi-agent-broker — Project Target
 
-## 專案目標
-建立 LLM-agnostic 的跨機器多 agent 協作平台。完整設計見 `architcture.md`。
+## 專案核心理念（thesis）
 
-Phase 1 鎖定最小可運行核心：**agent + message + task**。先把兩台 Claude Code 互通跑起來，再擴展其他 LLM 接入與進階功能。
+**讓不同 vendor 的 LLM 像一個 team 一起做事 — 以 capability 為契約，vendor 可換**。
+
+單一 vendor 的 agent stack（Claude Code subagents / OpenAI Assistants / Gemini agents）已經把「同個 model N 個 instance 互相分工」做得很好 — 我們**不重做**那塊。mab-broker 是為了**跨 vendor / 跨硬體**這個更難的問題而存在的：
+
+| 場景 | 用 broker 的理由 |
+|------|----------------|
+| Claude opus 規劃 → gpt-oss 推理 → Claude sonnet 收尾 | Anthropic 跟 OpenAI OSS 兩家不互通，broker 把它們變同 task pool |
+| 本地 Llama-70b 處理 PII（不出網）+ 雲端 model 處理一般 task | 數據主權 + 跨網段，單 vendor 解不了 |
+| Anthropic rate-limited → 自動 reroute 到 DeepSeek-R1 | Capability 是契約，vendor 是替換品 |
+| GPU 主機跑 qwen-coder 寫 code + Claude sonnet review | 把每個 task 派給「最對的 LLM」，不是「最近的 LLM」 |
+
+### 不適合 mab-broker 的場景（不要用）
+
+- **單 vendor** — Claude Code 內建 subagent 已夠好，不需要 broker
+- **N 個同 Claude 副本互動** — 用 Claude Code 的 `Task` / Agent tool 就好
+- **同步對話 / 互動 chat** — broker 是 task-based，不是 turn-based
+- **公網多租戶** — Phase 4 (TLS / JWT / IP allowlist) 還沒做，目前限 LAN / VPN / Tailscale
+
+### 設計 invariants
+
+1. **Capability 是 first-class** — task 寫 `required_all=["tier:reasoning"]`，不寫 agent_id。Lead 不需要知道有哪些 worker
+2. **Vendor 可換** — 同 capability tag 可以由不同 vendor / 不同 host / 不同 model 提供，lead-side prompt 不變
+3. **Broker passive** — broker 不做 orchestration 決策（不拆 plan、不選 LLM），那是 lead role 的工作。broker 只負責 message routing + capability filter
+4. **每加一個 vendor = 一個 ~50 行 adapter**，不是 N 行的 client SDK + auth + retry boilerplate。`mab.worker.adapters.base.LLMAdapter` 就 3 個 abstract method
 
 ---
+
+## Phase 1 範圍
 
 ## Phase 1 範圍
 

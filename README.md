@@ -1,8 +1,53 @@
 # multi-agent-broker
 
-**A LLM-agnostic broker that lets agents on different machines — running different LLMs — collaborate over a single shared message bus, with capability-aware task routing built in.**
+**Make LLMs from different vendors collaborate as one team — by capability, not by name.**
 
-Spin up the broker on any reachable host, register one API key per agent, and Claude Code / Gemini CLI instances on separate boxes can list each other, exchange direct messages, and pass tasks back and forth. Tasks can require specific model capabilities (e.g. `tier:opus`, `family:claude`, `vision`) so high-stakes work only goes to agents that can handle it. Claude Code integration ships today via MCP stdio; REST + WebSocket are open for any other language or LLM framework to plug in.
+A single-vendor agent stack (Claude Code subagents, OpenAI Assistants, Gemini agents) can already coordinate N copies of *its* model. mab-broker is for the harder problem: **the right LLM for this sub-task lives in another vendor's stack, on your own hardware, or split across both**. Examples this codebase exists to enable:
+
+- **Claude Opus** plans a workflow, dispatches the heavy reasoning step to **gpt-oss:120b on Ollama Cloud** (1/10 the cost), then routes the polishing pass to **Claude Sonnet via subscription** — all in one autonomous task chain.
+- **Local Llama-70b on your GPU box** handles PII-bearing input (no cloud), the same lead also dispatches non-sensitive sub-tasks to **GPT-4o**, both happen in the same plan.
+- Anthropic gets rate-limited mid-workflow → broker reroutes the next task to **DeepSeek-R1** automatically, because capability is the contract and vendor is interchangeable.
+
+Tasks declare **what they need** (`required_all=["tier:reasoning", "host:cloud"]`), agents declare **what they offer** (`["model:gpt-oss:120b-cloud", "family:gpt-oss", "tier:reasoning", "host:cloud", "provider:ollama"]`), and the broker does the matching. You can swap a worker's underlying LLM tomorrow without changing a single lead-side prompt.
+
+### Where mab-broker isn't a fit
+
+- **Single-vendor setups** — you already have great native options. Use those.
+- **Public-internet multi-tenant** — TLS / wss / JWT / IP allowlist still pending (Phase 4). Today this is LAN / VPN / Tailscale.
+- **Synchronous chat** — broker is task-shaped, not turn-based dialogue.
+
+### What it looks like in practice
+
+```
+┌─────────────────────────────────────────────────────────────┐
+│  Lead: Claude Opus (Anthropic API)                          │  ← your laptop
+│    "Plan, dispatch, monitor, synthesize"                    │
+└──────────────────────┬──────────────────────────────────────┘
+              create_task(required_all=[...])
+                       │
+                       ▼
+┌─────────────────────────────────────────────────────────────┐
+│  Broker (FastAPI + SQLite + WS)                             │  ← your network
+│    Capability-filtered push · atomic claim · data sovereign │
+└──┬────────────────────────────────────────┬─────────────────┘
+   │ tier:reasoning + host:cloud            │ tier:sonnet + family:claude
+   ▼                                         ▼
+┌──────────────────────┐                ┌──────────────────────┐
+│  Worker A            │                │  Worker B            │
+│  adapter: ollama     │                │  adapter: claude-cli │
+│  model: gpt-oss:120b │                │  model: claude-sonnet│
+│  via Ollama Cloud    │                │  via Max subscription│
+│  (OpenAI OSS family) │                │  (Anthropic family)  │
+└──────────────────────┘                └──────────────────────┘
+
+                          + add a worker for:
+                            – OpenAI direct (API key)
+                            – Gemini direct (API key)
+                            – Local Llama / Qwen / DeepSeek (GPU box, no internet)
+                            – any HTTP-speaking LLM (one ~50-line adapter)
+```
+
+One Python daemon (`mab-worker`) per worker host, four built-in adapters (`anthropic` / `ollama` / `claude-cli` / `mock`), swap with one CLI flag — `--adapter X --model Y`. **No client-side change for the lead when you swap vendors.**
 
 > **Status:** Phase 1 (core) + Phase 1.5 (deployment) + Phase 2.1 (capability routing) + Phase 2.2 (task delete + observability) + Phase 3a Roster + **Phase 3 worker daemon SDK** complete. 158 tests, real-subprocess end-to-end demos, one-shot installers for both broker and worker hosts, live cross-machine multi-LLM proof: claude-mac (Opus via Anthropic API) as lead orchestrates worker-gpt-oss-cloud (gpt-oss:120b via Ollama Cloud) running as a headless `mab-worker` systemd daemon — push-driven task routing settles in ~1 second end-to-end (broker push + daemon claim + Ollama inference + result write-back). Task dependencies / channels / shared context still pending.
 
