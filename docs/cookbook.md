@@ -252,10 +252,108 @@ curl /tasks/C → status=failed, notes=[..., "upstream dependency $B failed (cas
 
 ---
 
+## Recipe 4 — Shared context (pin a spec once, every worker references it)
+
+**Story:** You have a multi-step plan where every worker needs the same constraint sheet — coding-style guide, product brief, brand voice. Repeating it in every `task.description` is duplication and noise. Pin it once as a shared context; every task description just references the id.
+
+**Topology:** one context, N tasks referencing it.
+
+```
++-------------------+
+|  context: spec    |
+|  id: ctx_abc123   |
+|  "Project style   |
+|   guide..."       |
++--------+----------+
+         |
+         +--- task A description: "...follow rules in ctx_abc123..."
+         +--- task B description: "...follow rules in ctx_abc123..."
+         +--- task C description: "...follow rules in ctx_abc123..."
+```
+
+### Dispatch
+
+```bash
+BROKER=http://192.168.1.212:8420
+LEAD_KEY=mab-ak-XXXX_lead
+
+# 1. Pin the spec once
+CTX=$(curl -sS -X POST -H "Authorization: Bearer $LEAD_KEY" -H "Content-Type: application/json" \
+  -d '{
+    "name": "team-style-guide",
+    "content": "# Team writing style\n\n- Use plain language. No corporate jargon.\n- 2-3 sentences per paragraph max.\n- Cite specific examples, not abstractions.\n- End with a takeaway, not a summary.",
+    "content_type": "text/markdown"
+  }' \
+  "$BROKER/api/v1/contexts" | python3 -c "import json,sys;print(json.load(sys.stdin)['id'])")
+
+echo "Pinned ctx=$CTX"
+
+# 2. Dispatch tasks that reference it by id. The worker reads it via
+#    mcp__mab__get_context once at task start, then applies the rules.
+for topic in "RSA" "Elliptic curves" "Post-quantum crypto"; do
+  curl -sS -X POST -H "Authorization: Bearer $LEAD_KEY" -H "Content-Type: application/json" \
+    -d "{
+      \"title\": \"Explain $topic\",
+      \"description\": \"Read the team writing style guide from context $CTX (via mcp__mab__get_context). Then explain $topic in 3 short paragraphs that strictly follow that style.\",
+      \"required_all\": [\"tier:sonnet\"]
+    }" \
+    "$BROKER/api/v1/tasks" > /dev/null
+done
+```
+
+### What workers do
+
+For the `claude-cli` adapter: spawned `claude -p` sees the task description, recognises the `mcp__mab__get_context` reference, calls it via its loaded `mab` MCP server, and incorporates the style guide before writing.
+
+For `ollama` / `anthropic` adapters (which don't have MCP access from the LLM side): a daemon helper could pre-fetch any `ctx_*` references in `task.description` and inline the content before sending to the LLM. **Not yet implemented in the daemon** — for those adapters today, the lead has to inline the context content directly when dispatching, OR you stick with `claude-cli` adapter workers for context-aware tasks.
+
+### Update the spec, all future tasks see the new version
+
+```bash
+curl -sS -X PATCH -H "Authorization: Bearer $LEAD_KEY" -H "Content-Type: application/json" \
+  -d '{"content": "# Updated style\n\n- ..."}' \
+  "$BROKER/api/v1/contexts/$CTX"
+```
+
+In-flight tasks aren't affected (they read the context at start). Newly-dispatched tasks see the new version. **No "find all tasks that reference this and rewrite their descriptions" — references are by id, content is fetched live.**
+
+### Auto-promote an upstream result to a context
+
+Pattern: when task A produces an artefact that downstream tasks need verbatim, publish A's result as a context with `task_id=A.id`. The link lets a downstream worker / human trace the origin.
+
+```bash
+# After A completes
+A_RESULT=$(curl -sf -H "Authorization: Bearer $LEAD_KEY" "$BROKER/api/v1/tasks/$A" | jq -r .result)
+
+CTX_A=$(curl -sS -X POST -H "Authorization: Bearer $LEAD_KEY" -H "Content-Type: application/json" \
+  -d "{
+    \"name\": \"step-A-output\",
+    \"content\": $(jq -Rs <<< "$A_RESULT"),
+    \"content_type\": \"text/plain\",
+    \"task_id\": \"$A\"
+  }" \
+  "$BROKER/api/v1/contexts" | jq -r .id)
+
+# Then create B referencing CTX_A
+curl ... create_task {description: "Polish the draft pinned at ctx $CTX_A. ..."}
+```
+
+This is a workaround for the "downstream needs upstream result verbatim" gap. It still requires the lead to wait for A then create the context — it doesn't compose with `depends_on` fire-once dispatch (that gap remains until inline result substitution lands).
+
+### What this shows
+
+- **Spec deduplication** — write once, reference everywhere. If your style guide is 500 words, every task description in your plan saves 500 words.
+- **Update flow** — fix a typo in the spec, all future tasks pick it up immediately. No bulk task rewriting.
+- **Cross-vendor visibility** — both `claude-cli` and (eventually) `ollama` daemon workers can read the same context. The shared doc is broker-mediated, vendor-neutral.
+- **Task-result traceability** — the optional `task_id` link records which task originally produced a piece of pinned content, so audits walk back through the chain cleanly.
+
+---
+
 ## What's NOT in this cookbook (yet)
 
-- **Inline result substitution.** Recipes here gate by `depends_on` but don't auto-inject upstream `result` into downstream `description`. If your downstream prompt needs the upstream result verbatim (e.g. "polish this exact draft"), today you have to dispatch sequentially: create A, wait for A, read result, embed in B's description, create B. The fire-and-forget pattern works for plans where downstream prompts are self-contained.
-- **Channels and shared context.** When implemented, they'll appear here as recipes 4–N.
+- **Inline result substitution.** Recipes here gate by `depends_on` but don't auto-inject upstream `result` into downstream `description`. If your downstream prompt needs the upstream result verbatim (e.g. "polish this exact draft"), today you have to dispatch sequentially: create A, wait for A, read result, embed in B's description, create B. The fire-and-forget pattern works for plans where downstream prompts are self-contained, or use Recipe 4's auto-promote pattern with a context handoff doc.
+- **Daemon-side context expansion.** Non-MCP adapters (`ollama`, `anthropic`) can't fetch contexts from the LLM side. A future daemon enhancement would detect `ctx_*` references in `task.description` and inline the content before calling the LLM. For now, context-aware tasks need `claude-cli` adapter workers.
+- **Channels.** When implemented, they'll appear here as recipe 5+.
 - **Lead-mode skill end-to-end demos.** A future recipe will be "type a goal in natural language to a `/lead-mode` Claude Code session, watch it decompose and dispatch this chain automatically." For now, recipes show the underlying primitive.
 
 ## Troubleshooting

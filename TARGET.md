@@ -287,13 +287,40 @@ Lead 派完 3 個 task 就 done — broker 串行 gate、自動 cap routing、�
 - [x] Recipe 2 — Fan-in synthesis (two parallel inputs → one synthesiser，depends_on accepts multiple ids)
 - [x] Recipe 3 — Failure cascade (upstream fail → downstream auto-fail with cascade note)
 - [x] Troubleshooting table（schema migration trap、status flapping 等）
-- [ ] Recipe 4+ — channels / shared context recipes（等 feature 寫完再加）
+- [x] Recipe 4 — Shared context (pin spec / 上游 result auto-promote handoff)
+- [ ] Recipe 5+ — channels (等 feature 寫完)
 - [ ] Recipe N — `/lead-mode` skill 端到端（lead 自己用自然語言拆 plan 自動 dispatch）
+
+---
+
+## Phase 3 — Shared context (pinned reference docs)
+
+`docs/cookbook.md` Recipe 4 文件。Persistent named documents any agent can read。解 cookbook recipe 1 點出的「downstream 沒 inline 拿到 upstream result」gap。
+
+### 決策（已鎖定）
+
+| 項目 | 決定 |
+|------|------|
+| Name unique? | 不唯一。reference 永遠 by id；`list_contexts(name="X")` 拿 latest 用 |
+| WS broadcast for context events? | 沒有。Context 是 persistent reference 不是 event stream |
+| Read auth | 任何已認證 agent 都能讀（share docs by design） |
+| Mutate auth | 只 creator 可改 / 刪 |
+| Task linkage | `task_id` 欄位選填，把 context 跟產生它的 task 連起來方便追溯 |
+| Content type | reuse 既有 `ContentType` literal |
+
+### Sub-tasks (S)
+
+- [x] **S1.** `Context` pydantic model + DB schema + `db.create_context` / `get_context` / `list_contexts` / `update_context` / `delete_context`
+- [x] **S2.** REST routes `POST/GET/PATCH/DELETE /api/v1/contexts`
+- [x] **S3.** 9 REST 測試（basic create / task link / 404 / name filter / task_id filter / creator-only update / partial update / creator-only delete / any agent reads）
+- [x] **S4.** MCP tools (`create_context` / `list_contexts` / `get_context` / `update_context` / `delete_context`) + BrokerClient methods
+- [x] **S5.** 3 MCP 測試（round-trip / partial update / delete）
+- [x] **S6.** Cookbook Recipe 4 — pin team-style-guide 模式 + auto-promote 上游 result 模式 + 未來 daemon expansion 註記
 
 ---
 
 ## 後續 Phase（暫定）
 
-- **Phase 3**（剩餘）：channels、shared context（pin spec / 設計筆記）
+- **Phase 3**（剩餘）：channels
 - **Phase 4**：外網部署（TLS / wss / JWT / IP allowlist）
 - **Phase 5**：Web dashboard + 訊息全文檢索

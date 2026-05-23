@@ -49,7 +49,7 @@ Tasks declare **what they need** (`required_all=["tier:reasoning", "host:cloud"]
 
 One Python daemon (`mab-worker`) per worker host, four built-in adapters (`anthropic` / `ollama` / `claude-cli` / `mock`), swap with one CLI flag — `--adapter X --model Y`. **No client-side change for the lead when you swap vendors.**
 
-> **Status:** Phase 1 (core) + Phase 1.5 (deployment) + Phase 2.1 (capability routing) + Phase 2.2 (task delete + observability) + Phase 3a Roster + **Phase 3 worker daemon SDK** complete. 164 tests, real-subprocess end-to-end demos, one-shot installers for both broker and worker hosts, live cross-machine multi-LLM proof: claude-mac (Opus via Anthropic API) as lead orchestrates worker-gpt-oss-cloud (gpt-oss:120b via Ollama Cloud) running as a headless `mab-worker` systemd daemon — push-driven task routing settles in ~1 second end-to-end (broker push + daemon claim + Ollama inference + result write-back). Task dependencies / channels / shared context still pending.
+> **Status:** Phase 1 (core) + Phase 1.5 (deployment) + Phase 2.1 (capability routing) + Phase 2.2 (task delete + observability) + Phase 3a Roster + **Phase 3 worker daemon SDK** complete. 176 tests, real-subprocess end-to-end demos, one-shot installers for both broker and worker hosts, live cross-machine multi-LLM proof: claude-mac (Opus via Anthropic API) as lead orchestrates worker-gpt-oss-cloud (gpt-oss:120b via Ollama Cloud) running as a headless `mab-worker` systemd daemon — push-driven task routing settles in ~1 second end-to-end (broker push + daemon claim + Ollama inference + result write-back). Task dependencies / channels / shared context still pending.
 
 ---
 
@@ -414,7 +414,7 @@ CLI flags on `mab-agent` mirror the env vars; CLI takes precedence.
 
 ```bash
 uv run pytest
-# 164 tests, ~35s — includes real-subprocess end-to-end demo + live-broker daemon integration
+# 176 tests, ~35s — includes real-subprocess end-to-end demo + live-broker daemon integration
 ```
 
 Test layout:
@@ -447,7 +447,9 @@ Test layout:
 - **Phase 2.2** ✅ — task delete + `tools/watch.py` observability + live multi-agent cross-machine verification
 - **Phase 3a** ✅ — Lead Agent enablers: roster (`match_agents` + `is_stale` + `current_task` freshness), capability self-update MCP tools (`update_my_model` / `update_my_capabilities`), pre-WS capability declaration, push-driven `wait_for_task` MCP tool
 - **Phase 3** ✅ — `mab-worker` daemon SDK + 4 adapters (Anthropic / Ollama / Claude CLI / Mock), `setup-worker.sh` one-shot install, push-driven event-name-filtered task queue. Production-verified: claude-mac (Opus) → broker → daemon (gpt-oss:120b via Ollama Cloud) end-to-end in ~1s
-- **Phase 3 (D — depends_on)** ✅ — task dependencies: blocked status + auto-unblock on upstream completion + failure cascade through downstream chains. Lets a lead fire a whole multi-step plan in one go instead of polling between steps. 6 new tests; total 164. **Production demo recipes** in [`docs/cookbook.md`](docs/cookbook.md) — Two-stage thinking (gpt-oss reasoning → claude prose), fan-in synthesis, failure cascade.
+- **Phase 3 (D — depends_on)** ✅ — task dependencies: blocked status + auto-unblock on upstream completion + failure cascade through downstream chains. Lets a lead fire a whole multi-step plan in one go instead of polling between steps.
+- **Phase 3 (S — shared context)** ✅ — pinned named documents any agent can read. Solves "every task description duplicates the same style guide" and supports auto-promoting upstream task results as named handoff docs. 12 new tests (9 REST + 3 MCP). **Production demo recipes** in [`docs/cookbook.md`](docs/cookbook.md): Two-stage thinking, fan-in synthesis, failure cascade, pinned project spec.
+- Test total: 176.
 - **Phase 3 (remaining)** — channels, shared context, lead-mode demo cookbook
 - **Phase 4** — TLS + JWT + IP allowlist for public-internet deployment
 - **Phase 5** — Web dashboard + message full-text search
