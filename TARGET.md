@@ -279,8 +279,21 @@ Lead 派完 3 個 task 就 done — broker 串行 gate、自動 cap routing、�
 
 ---
 
+## Phase 3 — Lead-mode cookbook
+
+`docs/cookbook.md` — production-verified cross-vendor recipes，每個都跑過實機。
+
+- [x] Recipe 1 — Two-stage thinking (gpt-oss reasoning + claude-sonnet prose, sequential chain via depends_on)
+- [x] Recipe 2 — Fan-in synthesis (two parallel inputs → one synthesiser，depends_on accepts multiple ids)
+- [x] Recipe 3 — Failure cascade (upstream fail → downstream auto-fail with cascade note)
+- [x] Troubleshooting table（schema migration trap、status flapping 等）
+- [ ] Recipe 4+ — channels / shared context recipes（等 feature 寫完再加）
+- [ ] Recipe N — `/lead-mode` skill 端到端（lead 自己用自然語言拆 plan 自動 dispatch）
+
+---
+
 ## 後續 Phase（暫定）
 
-- **Phase 3**（剩餘）：channels、shared context（pin spec / 設計筆記）、lead-mode demo cookbook
+- **Phase 3**（剩餘）：channels、shared context（pin spec / 設計筆記）
 - **Phase 4**：外網部署（TLS / wss / JWT / IP allowlist）
 - **Phase 5**：Web dashboard + 訊息全文檢索

@@ -447,7 +447,7 @@ Test layout:
 - **Phase 2.2** ✅ — task delete + `tools/watch.py` observability + live multi-agent cross-machine verification
 - **Phase 3a** ✅ — Lead Agent enablers: roster (`match_agents` + `is_stale` + `current_task` freshness), capability self-update MCP tools (`update_my_model` / `update_my_capabilities`), pre-WS capability declaration, push-driven `wait_for_task` MCP tool
 - **Phase 3** ✅ — `mab-worker` daemon SDK + 4 adapters (Anthropic / Ollama / Claude CLI / Mock), `setup-worker.sh` one-shot install, push-driven event-name-filtered task queue. Production-verified: claude-mac (Opus) → broker → daemon (gpt-oss:120b via Ollama Cloud) end-to-end in ~1s
-- **Phase 3 (D — depends_on)** ✅ — task dependencies: blocked status + auto-unblock on upstream completion + failure cascade through downstream chains. Lets a lead fire a whole multi-step plan in one go instead of polling between steps. 6 new tests; total 164.
+- **Phase 3 (D — depends_on)** ✅ — task dependencies: blocked status + auto-unblock on upstream completion + failure cascade through downstream chains. Lets a lead fire a whole multi-step plan in one go instead of polling between steps. 6 new tests; total 164. **Production demo recipes** in [`docs/cookbook.md`](docs/cookbook.md) — Two-stage thinking (gpt-oss reasoning → claude prose), fan-in synthesis, failure cascade.
 - **Phase 3 (remaining)** — channels, shared context, lead-mode demo cookbook
 - **Phase 4** — TLS + JWT + IP allowlist for public-internet deployment
 - **Phase 5** — Web dashboard + message full-text search
