@@ -27,6 +27,7 @@ dev = [
 [project.scripts]
 mab-broker = "mab.broker.cli:main"
 mab-agent = "mab.mcp_server.server:main"
+mab-worker = "mab.worker.cli:main"
 
 [build-system]
 requires = ["hatchling"]
