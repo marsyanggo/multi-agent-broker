@@ -49,7 +49,7 @@ Tasks declare **what they need** (`required_all=["tier:reasoning", "host:cloud"]
 
 One Python daemon (`mab-worker`) per worker host, four built-in adapters (`anthropic` / `ollama` / `claude-cli` / `mock`), swap with one CLI flag — `--adapter X --model Y`. **No client-side change for the lead when you swap vendors.**
 
-> **Status:** Phase 1 (core) + Phase 1.5 (deployment) + Phase 2.1 (capability routing) + Phase 2.2 (task delete + observability) + Phase 3a Roster + **Phase 3 worker daemon SDK** complete. 188 tests, real-subprocess end-to-end demos, one-shot installers for both broker and worker hosts, live cross-machine multi-LLM proof: claude-mac (Opus via Anthropic API) as lead orchestrates worker-gpt-oss-cloud (gpt-oss:120b via Ollama Cloud) running as a headless `mab-worker` systemd daemon — push-driven task routing settles in ~1 second end-to-end (broker push + daemon claim + Ollama inference + result write-back). Task dependencies / channels / shared context still pending.
+> **Status:** Phase 1 (core) + Phase 1.5 (deployment) + Phase 2.1 (capability routing) + Phase 2.2 (task delete + observability) + Phase 3a Roster + **Phase 3 fully complete** — worker daemon SDK + `depends_on` task chains + shared context + channels. 188 tests, real-subprocess end-to-end demos, one-shot installers for both broker and worker hosts, live cross-machine multi-LLM proof: claude-mac (Opus via Anthropic API) as lead orchestrates worker-gpt-oss-cloud (gpt-oss:120b via Ollama Cloud) running as a headless `mab-worker` systemd daemon — push-driven task routing settles in ~1 second end-to-end (broker push + daemon claim + Ollama inference + result write-back). End-to-end natural-language demo (`/lead-mode` builds a playable Chrome-dino game across two vendor workers in ~5 minutes) verified — see [`docs/cookbook.md`](docs/cookbook.md) Recipe 6 + [`examples/dino.html`](examples/dino.html).
 
 ---
 
@@ -449,9 +449,9 @@ Test layout:
 - **Phase 3** ✅ — `mab-worker` daemon SDK + 4 adapters (Anthropic / Ollama / Claude CLI / Mock), `setup-worker.sh` one-shot install, push-driven event-name-filtered task queue. Production-verified: claude-mac (Opus) → broker → daemon (gpt-oss:120b via Ollama Cloud) end-to-end in ~1s
 - **Phase 3 (D — depends_on)** ✅ — task dependencies: blocked status + auto-unblock on upstream completion + failure cascade through downstream chains. Lets a lead fire a whole multi-step plan in one go instead of polling between steps.
 - **Phase 3 (S — shared context)** ✅ — pinned named documents any agent can read. Solves "every task description duplicates the same style guide" and supports auto-promoting upstream task results as named handoff docs.
-- **Phase 3 (CH — channels)** ✅ — named group-broadcast topics. Members get WS push for every new message; non-members can still read history via REST but don't receive pushes and can't post. Distinct from direct messages (1:1) and tasks (claim-lifecycle) — for coordination noise, status updates, open queries. 12 new tests (9 REST + 2 WS + 1 MCP). **Production demo recipes** in [`docs/cookbook.md`](docs/cookbook.md): Two-stage thinking, fan-in synthesis, failure cascade, pinned project spec, group broadcast.
+- **Phase 3 (CH — channels)** ✅ — named group-broadcast topics. Members get WS push for every new message; non-members can still read history via REST but don't receive pushes and can't post. Distinct from direct messages (1:1) and tasks (claim-lifecycle) — for coordination noise, status updates, open queries. 12 new tests (9 REST + 2 WS + 1 MCP).
+- **Phase 3 (cookbook)** ✅ — 6 production-verified cross-vendor recipes in [`docs/cookbook.md`](docs/cookbook.md): two-stage thinking, fan-in synthesis, failure cascade, pinned project spec, group broadcast, **and `/lead-mode` end-to-end** (natural language → fan-out + fan-in plan → playable [`examples/dino.html`](examples/dino.html) artifact, ~5 min wall-clock).
 - Test total: 188.
-- **Phase 3 (remaining)** — channels, shared context, lead-mode demo cookbook
 - **Phase 4** — TLS + JWT + IP allowlist for public-internet deployment
 - **Phase 5** — Web dashboard + message full-text search
 

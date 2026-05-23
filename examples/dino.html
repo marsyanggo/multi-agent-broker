@@ -1,0 +1,221 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Dino</title>
+  <style>
+    *, *::before, *::after {
+      margin: 0;
+      padding: 0;
+      box-sizing: border-box;
+    }
+
+    html, body {
+      width: 100%;
+      height: 100%;
+    }
+
+    body {
+      background: #fff;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      font-family: "Courier New", Courier, monospace;
+      color: #535353;
+    }
+
+    #game {
+      display: block;
+      border: 1px solid #000;
+    }
+
+    #caption {
+      margin-top: 8px;
+      font-size: 11px;
+      letter-spacing: 0.05em;
+      color: #535353;
+      text-transform: lowercase;
+    }
+  </style>
+</head>
+<body>
+  <canvas id="game" width="800" height="200"></canvas>
+  <div id="caption">press space to jump</div>
+  <script>
+    (function() {
+        const canvas = document.getElementById('game');
+        const ctx = canvas.getContext('2d');
+        ctx.imageSmoothingEnabled = false;
+
+        const GRAVITY = 0.6;
+        const JUMP_VEL = -12;
+        const GROUND_Y = 180;
+        const DINO_X = 50;
+        const DINO_SIZE = 44;
+        const DINO_START_Y = GROUND_Y - DINO_SIZE;
+        const OBSTACLE_W = 20;
+        const OBSTACLE_H = 40;
+        const OBSTACLE_Y = GROUND_Y - OBSTACLE_H;
+        const INITIAL_SPEED = 6;
+        const MAX_SPEED = 12;
+        const SPEED_STEP_SCORE = 500;
+        const FONT_COLOR = '#535353';
+
+        let dino = { x: DINO_X, y: DINO_START_Y, vy: 0, width: DINO_SIZE, height: DINO_SIZE, grounded: true };
+        let obstacles = [];
+        let spawnTimer = 0;
+        let nextSpawnDelay = 1500; // ms
+        let score = 0;
+        let highScore = 0;
+        let gameSpeed = INITIAL_SPEED;
+        let state = 'playing'; // 'playing' | 'over'
+        let lastTimestamp = performance.now();
+
+        function reset() {
+            dino = { x: DINO_X, y: DINO_START_Y, vy: 0, width: DINO_SIZE, height: DINO_SIZE, grounded: true };
+            obstacles = [];
+            spawnTimer = 0;
+            nextSpawnDelay = 1500;
+            score = 0;
+            gameSpeed = INITIAL_SPEED;
+            state = 'playing';
+        }
+
+        function spawnObstacle() {
+            obstacles.push({ x: canvas.width, y: OBSTACLE_Y, width: OBSTACLE_W, height: OBSTACLE_H });
+        }
+
+        function rectOverlap(a, b) {
+            return a.x < b.x + b.width &&
+                   a.x + a.width > b.x &&
+                   a.y < b.y + b.height &&
+                   a.y + a.height > b.y;
+        }
+
+        function update(dt) {
+            if (state === 'playing') {
+                // Dino physics
+                if (!dino.grounded) {
+                    dino.vy += GRAVITY;
+                    dino.y += dino.vy;
+                    if (dino.y >= DINO_START_Y) {
+                        dino.y = DINO_START_Y;
+                        dino.vy = 0;
+                        dino.grounded = true;
+                    }
+                }
+
+                // Move obstacles
+                obstacles.forEach(o => o.x -= gameSpeed);
+                obstacles = obstacles.filter(o => o.x + o.width > -20);
+
+                // Spawn logic
+                spawnTimer += dt;
+                if (spawnTimer >= nextSpawnDelay) {
+                    spawnObstacle();
+                    spawnTimer = 0;
+                    nextSpawnDelay = 800 + Math.random() * 800; // 800‑1600 ms
+                }
+
+                // Collision detection
+                for (let o of obstacles) {
+                    if (rectOverlap(dino, o)) {
+                        state = 'over';
+                        break;
+                    }
+                }
+
+                // Scoring and speed
+                score++;
+                if (score > highScore) highScore = score;
+                if (score % SPEED_STEP_SCORE === 0 && gameSpeed < MAX_SPEED) {
+                    gameSpeed++;
+                }
+            }
+        }
+
+        function render() {
+            // Background
+            ctx.fillStyle = '#fff';
+            ctx.fillRect(0, 0, canvas.width, canvas.height);
+
+            // Ground line
+            ctx.fillStyle = FONT_COLOR;
+            ctx.fillRect(0, GROUND_Y, canvas.width, 1);
+
+            // Dino
+            ctx.fillStyle = FONT_COLOR;
+            ctx.fillRect(dino.x, dino.y, dino.width, dino.height);
+            // Eye dot
+            ctx.fillRect(dino.x + 30, dino.y + 10, 4, 4);
+
+            // Obstacles
+            obstacles.forEach(o => {
+                ctx.fillRect(o.x, o.y, o.width, o.height);
+            });
+
+            // HUD (top‑right)
+            const hiStr = String(highScore).padStart(5, '0');
+            const curStr = String(score).padStart(5, '0');
+            const hudText = `HI ${hiStr}   ${curStr}`;
+            ctx.font = '14px monospace';
+            ctx.textBaseline = 'top';
+            ctx.fillStyle = FONT_COLOR;
+            const hudWidth = ctx.measureText(hudText).width;
+            ctx.fillText(hudText, canvas.width - hudWidth - 10, 10);
+
+            // Game over overlay
+            if (state === 'over') {
+                ctx.fillStyle = FONT_COLOR;
+                ctx.font = '24px monospace';
+                const overMsg = 'GAME OVER';
+                const overW = ctx.measureText(overMsg).width;
+                ctx.fillText(overMsg, (canvas.width - overW) / 2, canvas.height / 2 - 20);
+
+                ctx.font = '14px monospace';
+                const subMsg = 'press R to restart';
+                const subW = ctx.measureText(subMsg).width;
+                ctx.fillText(subMsg, (canvas.width - subW) / 2, canvas.height / 2 + 10);
+            }
+        }
+
+        function loop(timestamp) {
+            const dt = timestamp - lastTimestamp;
+            lastTimestamp = timestamp;
+
+            update(dt);
+            render();
+
+            requestAnimationFrame(loop);
+        }
+
+        // Input handling
+        window.addEventListener('keydown', function (e) {
+            if (e.code === 'Space' || e.code === 'ArrowUp') {
+                if (state === 'playing' && dino.grounded) {
+                    dino.vy = JUMP_VEL;
+                    dino.grounded = false;
+                }
+                e.preventDefault();
+            } else if (e.code === 'KeyR') {
+                if (state === 'over') {
+                    reset();
+                }
+            }
+        });
+
+        canvas.addEventListener('touchstart', function (e) {
+            if (state === 'playing' && dino.grounded) {
+                dino.vy = JUMP_VEL;
+                dino.grounded = false;
+            }
+            e.preventDefault();
+        }, { passive: false });
+
+        requestAnimationFrame(loop);
+    })();
+  </script>
+</body>
+</html>

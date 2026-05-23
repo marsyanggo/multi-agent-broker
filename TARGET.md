@@ -289,7 +289,7 @@ Lead 派完 3 個 task 就 done — broker 串行 gate、自動 cap routing、�
 - [x] Troubleshooting table（schema migration trap、status flapping 等）
 - [x] Recipe 4 — Shared context (pin spec / 上游 result auto-promote handoff)
 - [x] Recipe 5 — Channels (group broadcast for coordination noise / open queries)
-- [ ] Recipe N — `/lead-mode` skill 端到端（lead 自己用自然語言拆 plan 自動 dispatch）
+- [x] Recipe 6 — `/lead-mode` 端到端（natural language → fan-out + fan-in dino game demo, 4 tasks, ~5 min end-to-end, examples/dino.html artifact）
 
 ---
 

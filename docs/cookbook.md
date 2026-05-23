@@ -407,12 +407,115 @@ Channels are NOT a task replacement — they don't have claim semantics, capabil
 
 ---
 
+## Recipe 6 — `/lead-mode` end-to-end (natural language → cross-vendor artifact)
+
+**Story:** User types one sentence to a Claude Code `/lead-mode` session: *"build a small dinosaur jumping cactus game to demo our cross-vendor flow."* The lead agent (Opus) scouts the roster, decomposes into a fan-in plan, dispatches across two vendor daemons in parallel, and integrates the results — producing a single-file `examples/dino.html` that actually plays in a browser.
+
+This is the recipe that ties together **everything else in this cookbook** — capability routing (Recipe 1's foundation), parallel fan-out + `depends_on` fan-in (Recipe 2's shape), and a real downstream artifact. Lead writes zero code itself except the spec and the final splice; broker auto-sequences the rest.
+
+**Topology:** fan-out then fan-in, with the lead as both designer (A) and integrator (D).
+
+```
+              +-----------+
+              |  A: spec  |
+              |  opus     | ~45s
+              |  (lead)   |
+              +-----+-----+
+                    |
+       +------------+------------+
+       |                         |
+       v                         v
++------------+            +-------------+
+|  B: JS     |            |  C: HTML    |
+|  gpt-oss   | ~25s       |  sonnet     | ~8s
+|  reasoning | (Ollama    |  (claude-cli| (Anthropic
++------+-----+  Cloud)    +------+------+  Max sub)
+       |                         |
+       +------------+------------+
+                    |
+                    v depends_on=[B,C]
+              +-----------+
+              |  D: merge |
+              |  opus     | ~30s
+              |  (lead)   |
+              +-----------+
+                    |
+                    v
+        examples/dino.html
+```
+
+### How it actually ran
+
+User in a `claude` session opened with `/lead-mode`, then typed the goal. Lead-mode skill bound the session to: roster scout → propose decomposition → dispatch → monitor → synthesize.
+
+The actual run on 2026-05-23 20:44–20:49 PDT against the broker on 192.168.1.212:
+
+| # | Task ID | Title | Worker | Tier | Created → Completed | Wall-clock |
+|---|---------|-------|--------|------|---------------------|------------|
+| A | `ab00cf70` | Dino game — design spec | claude-mac (lead) | opus | 20:44:57 → 20:45:42 | 45s |
+| B | `2bcb44e4` | JS game logic | worker-gpt-oss-cloud | reasoning | 20:47:28 → 20:47:53 | 25s |
+| C | `e687fcbf` | HTML+CSS shell | worker-claude-sonnet | sonnet | 20:47:35 → 20:47:43 | **8s** |
+| D | `2fe35704` | Integrate B+C → dino.html | claude-mac (lead) | opus | 20:47:48 (blocked) → unblocked 20:47:53 → completed 20:49:40 | ~110s (mostly write+verify) |
+
+B and C ran **in parallel** — C finished first (8s claude-cli cold start + small output) but D stayed `blocked` until B finished 17s later. As soon as B's `update_task status=completed` landed, broker's `_propagate_completion` hook scanned downstream, found D's dependency set satisfied, flipped D from `blocked → pending`, and emitted `task_event:created` so D could be picked up. Lead's `list_tasks` saw the transition with the broker note: `"dependencies satisfied, unblocked"`.
+
+**Total wall-clock from "go" to playable artifact: ~5 minutes**, of which ~25s was the actual cross-vendor parallel inference window. The rest was lead-side spec drafting (Opus, A) and integration write/verify (Opus, D).
+
+### Why this is interesting
+
+- **One natural-language sentence → coordinated multi-vendor output.** User said one line; lead handled the whole orchestration. The plan was presented for approval in Traditional Chinese, then fired in 4 `create_task` calls.
+- **Real fan-in via `depends_on`.** Two parallel sub-tasks for the parallelisable parts (logic vs UI — independent modulo the shared spec), one synthesis task gated on both. No lead polling between the steps — broker handled it.
+- **Cross-vendor character routing.** B went to gpt-oss because the task is mechanical state-machine code (where the reasoning model's terseness fits). C went to claude-sonnet because HTML/CSS rewards prose-style aesthetic judgement (where Claude's voice fits). Capability tags `tier:reasoning` and `tier:sonnet` made this routing automatic — lead didn't pick agent IDs.
+- **The artifact actually runs.** `open examples/dino.html` → playable game. Press space to jump, R to restart. Single file, no external assets, ~190 lines total. Lead did **zero** game code — only the spec and a one-step copy-paste of the `// GAME_LOGIC_HERE` placeholder.
+
+### Interface contract that made the splice trivial
+
+The decomposition only worked cleanly because the lead's task descriptions enforced a strict interface:
+
+- **B's contract:** "Output ONLY the JavaScript code — a single IIFE that wires onto `<canvas id='game' width='800' height='200'>`. Do NOT include `<script>` tags." → returns exactly an IIFE.
+- **C's contract:** "Output the complete HTML file. Inline `<script>` tag whose ONLY content is the line `// GAME_LOGIC_HERE`." → returns a complete shell with a single placeholder.
+- **D's integration:** plain string replace, no parser needed.
+
+This is the production lesson: **explicit interface contracts in task descriptions turn LLM outputs into composable parts**. Without the placeholder convention, D would have needed to parse C's HTML to find the right insertion point — fragile. With it, the splice is `c_html.replace('// GAME_LOGIC_HERE', b_js)`.
+
+### What this shows that prior recipes didn't
+
+| Recipe | Pattern | Vendor count | Lead involvement |
+|--------|---------|--------------|------------------|
+| Recipe 1 | sequential chain | 2 | dispatch only |
+| Recipe 2 | fan-in synthesis | 2 | dispatch only |
+| Recipe 3 | failure cascade | 2 | observe |
+| Recipe 4 | shared context pin | 2 | dispatch + pin |
+| Recipe 5 | channel broadcast | N | post + observe |
+| **Recipe 6** | **fan-out + fan-in + lead-as-worker** | **2 + lead** | **design + integrate** |
+
+Recipe 6 is the first recipe where the lead is **also a worker** in its own plan (A and D were self-assigned to claude-mac, the only `tier:opus` agent online). This is the realistic shape for small teams: opus for design + synthesis, cheaper/faster vendor workers for the parallelisable mid-tier work.
+
+### Quirks observed during this run
+
+- **Broker on 192.168.1.212 still pre-Phase-3-S/CH.** The originally planned step "pin spec as shared context `dino-spec`" returned 404 — broker `/api/v1/contexts` route not deployed yet. Pivoted to inlining the spec into B and C's `description` directly. *This is actually closer to production reality anyway* — daemon adapters (`ollama`, `anthropic`) can't fetch contexts from the LLM side (no MCP), so inlining is the path even when the broker has `/contexts`.
+- **claude-mac shows `status="offline"` despite live heartbeat.** Self-PATCHing status doesn't always survive Claude Code reconnects; the heartbeat is what `is_stale` actually looks at. Lead used `list_agents()` (no filter) instead of `match_agents(status="online")` so the offline-but-fresh self-row didn't drop out.
+- **B (gpt-oss) generated 130 lines of clean JS in 25s.** Cold start + inference for the 120b cloud model. C (claude-sonnet via `claude -p` subprocess) was faster (8s) because the output was smaller and claude-cli was warm.
+
+### Reproducing this
+
+1. Open a Claude Code session: `cd <repo> && claude --model claude-opus-4-7`
+2. `/load` to bring in TARGET + SAVE context.
+3. `/lead-mode` to enter orchestrator role.
+4. Type a goal sentence — e.g. *"build a small dinosaur jumping cactus game in single-file HTML"*.
+5. Approve the proposed decomposition.
+6. Wait ~25s for B+C parallel, then ~30s for D integration. Total ~1–5 minutes depending on goal complexity.
+7. Open the produced artifact (path is in D's `result`).
+
+The `/lead-mode` skill itself lives at `.claude/skills/lead-mode/SKILL.md`. It's prompt-only — no executable code beyond what the LLM does with the MCP tools.
+
+---
+
 ## What's NOT in this cookbook (yet)
 
 - **Inline result substitution.** Recipes here gate by `depends_on` but don't auto-inject upstream `result` into downstream `description`. If your downstream prompt needs the upstream result verbatim (e.g. "polish this exact draft"), today you have to dispatch sequentially: create A, wait for A, read result, embed in B's description, create B. The fire-and-forget pattern works for plans where downstream prompts are self-contained, or use Recipe 4's auto-promote pattern with a context handoff doc.
 - **Daemon-side context expansion.** Non-MCP adapters (`ollama`, `anthropic`) can't fetch contexts from the LLM side. A future daemon enhancement would detect `ctx_*` references in `task.description` and inline the content before calling the LLM. For now, context-aware tasks need `claude-cli` adapter workers.
 - **Channel auto-subscribe for new workers.** Today an agent must explicitly `join_channel` to receive pushes. There's no "subscribe all workers with `tier:reasoning` to `#dispatch` by capability" — coordinate this manually at agent registration time.
-- **Lead-mode skill end-to-end demos.** A future recipe will be "type a goal in natural language to a `/lead-mode` Claude Code session, watch it decompose and dispatch this chain automatically." For now, recipes show the underlying primitives.
 
 ## Troubleshooting
 
