@@ -489,6 +489,225 @@ async def test_match_agents_filters_by_status(two_agents):
         assert r.json() == []
 
 
+async def test_depends_on_blocks_until_upstream_completes(two_agents):
+    app, (key_a, _agent_a), (key_b, agent_b) = two_agents
+    async with AsyncClient(
+        transport=ASGITransport(app=app), base_url="http://t"
+    ) as c:
+        r = await c.post(
+            "/api/v1/tasks",
+            headers=_auth(key_a),
+            json={"title": "step 1", "assigned_to": agent_b.id},
+        )
+        upstream_id = r.json()["id"]
+        assert r.json()["status"] == "assigned"
+
+        r = await c.post(
+            "/api/v1/tasks",
+            headers=_auth(key_a),
+            json={"title": "step 2", "depends_on": [upstream_id]},
+        )
+        assert r.status_code == 201
+        downstream_id = r.json()["id"]
+        assert r.json()["status"] == "blocked"
+        assert r.json()["depends_on"] == [upstream_id]
+
+        # Blocked task can't be claimed
+        r = await c.post(
+            f"/api/v1/tasks/{downstream_id}/claim",
+            headers=_auth(key_b),
+        )
+        assert r.status_code == 409
+        assert "blocked" in r.json()["detail"]
+
+        # Complete the upstream
+        r = await c.patch(
+            f"/api/v1/tasks/{upstream_id}",
+            headers=_auth(key_b),
+            json={"status": "completed", "result": "step 1 done"},
+        )
+        assert r.status_code == 200
+
+        # Downstream should now be pending (unblocked)
+        r = await c.get(
+            f"/api/v1/tasks/{downstream_id}", headers=_auth(key_a)
+        )
+        assert r.json()["status"] == "pending"
+        assert any(
+            "unblocked" in note for note in r.json()["notes"]
+        )
+
+
+async def test_depends_on_fan_in_waits_for_all(two_agents):
+    app, (key_a, _agent_a), (key_b, agent_b) = two_agents
+    async with AsyncClient(
+        transport=ASGITransport(app=app), base_url="http://t"
+    ) as c:
+        # Two upstream tasks both directly-assigned to bob
+        r = await c.post(
+            "/api/v1/tasks",
+            headers=_auth(key_a),
+            json={"title": "up-1", "assigned_to": agent_b.id},
+        )
+        up1 = r.json()["id"]
+        r = await c.post(
+            "/api/v1/tasks",
+            headers=_auth(key_a),
+            json={"title": "up-2", "assigned_to": agent_b.id},
+        )
+        up2 = r.json()["id"]
+
+        # Downstream blocked on both
+        r = await c.post(
+            "/api/v1/tasks",
+            headers=_auth(key_a),
+            json={
+                "title": "merge",
+                "depends_on": [up1, up2],
+                "assigned_to": agent_b.id,
+            },
+        )
+        merge = r.json()["id"]
+        assert r.json()["status"] == "blocked"
+
+        # Complete only up-1 — downstream should remain blocked
+        await c.patch(
+            f"/api/v1/tasks/{up1}",
+            headers=_auth(key_b),
+            json={"status": "completed", "result": "up1 done"},
+        )
+        r = await c.get(f"/api/v1/tasks/{merge}", headers=_auth(key_a))
+        assert r.json()["status"] == "blocked"
+
+        # Complete up-2 too — now downstream unblocks
+        await c.patch(
+            f"/api/v1/tasks/{up2}",
+            headers=_auth(key_b),
+            json={"status": "completed", "result": "up2 done"},
+        )
+        r = await c.get(f"/api/v1/tasks/{merge}", headers=_auth(key_a))
+        # `assigned` because downstream had assigned_to set at create time
+        assert r.json()["status"] == "assigned"
+
+
+async def test_depends_on_upstream_failure_cascades(two_agents):
+    app, (key_a, _agent_a), (key_b, agent_b) = two_agents
+    async with AsyncClient(
+        transport=ASGITransport(app=app), base_url="http://t"
+    ) as c:
+        # 3-step chain: A -> B -> C
+        r = await c.post(
+            "/api/v1/tasks",
+            headers=_auth(key_a),
+            json={"title": "A", "assigned_to": agent_b.id},
+        )
+        a_id = r.json()["id"]
+        r = await c.post(
+            "/api/v1/tasks",
+            headers=_auth(key_a),
+            json={"title": "B", "depends_on": [a_id]},
+        )
+        b_id = r.json()["id"]
+        r = await c.post(
+            "/api/v1/tasks",
+            headers=_auth(key_a),
+            json={"title": "C", "depends_on": [b_id]},
+        )
+        c_id = r.json()["id"]
+
+        # Both B and C should be blocked
+        for tid in (b_id, c_id):
+            r = await c.get(f"/api/v1/tasks/{tid}", headers=_auth(key_a))
+            assert r.json()["status"] == "blocked"
+
+        # Fail A → expect B + C to cascade to failed
+        await c.patch(
+            f"/api/v1/tasks/{a_id}",
+            headers=_auth(key_b),
+            json={"status": "failed", "note": "A broke"},
+        )
+
+        r = await c.get(f"/api/v1/tasks/{b_id}", headers=_auth(key_a))
+        b_row = r.json()
+        assert b_row["status"] == "failed"
+        assert any("upstream" in note for note in b_row["notes"])
+
+        r = await c.get(f"/api/v1/tasks/{c_id}", headers=_auth(key_a))
+        c_row = r.json()
+        assert c_row["status"] == "failed"
+        assert any("cascade" in note for note in c_row["notes"])
+
+
+async def test_depends_on_rejects_unknown_id(two_agents):
+    app, (key_a, _), _ = two_agents
+    async with AsyncClient(
+        transport=ASGITransport(app=app), base_url="http://t"
+    ) as c:
+        r = await c.post(
+            "/api/v1/tasks",
+            headers=_auth(key_a),
+            json={"title": "orphan", "depends_on": ["nonexistent"]},
+        )
+        assert r.status_code == 400
+        assert "not found" in r.json()["detail"]
+
+
+async def test_depends_on_rejects_already_failed_dep(two_agents):
+    app, (key_a, _), (key_b, agent_b) = two_agents
+    async with AsyncClient(
+        transport=ASGITransport(app=app), base_url="http://t"
+    ) as c:
+        # Create + fail an upstream
+        r = await c.post(
+            "/api/v1/tasks",
+            headers=_auth(key_a),
+            json={"title": "dead", "assigned_to": agent_b.id},
+        )
+        dead_id = r.json()["id"]
+        await c.patch(
+            f"/api/v1/tasks/{dead_id}",
+            headers=_auth(key_b),
+            json={"status": "failed"},
+        )
+
+        # Try to depend on it
+        r = await c.post(
+            "/api/v1/tasks",
+            headers=_auth(key_a),
+            json={"title": "downstream of dead", "depends_on": [dead_id]},
+        )
+        assert r.status_code == 400
+        assert "failed" in r.json()["detail"]
+
+
+async def test_depends_on_unblocks_when_dep_already_completed(two_agents):
+    """If you create a task whose deps are ALREADY completed at create time,
+    it should start pending (not blocked) and broadcast normally."""
+    app, (key_a, _), (key_b, agent_b) = two_agents
+    async with AsyncClient(
+        transport=ASGITransport(app=app), base_url="http://t"
+    ) as c:
+        r = await c.post(
+            "/api/v1/tasks",
+            headers=_auth(key_a),
+            json={"title": "fast", "assigned_to": agent_b.id},
+        )
+        up = r.json()["id"]
+        await c.patch(
+            f"/api/v1/tasks/{up}",
+            headers=_auth(key_b),
+            json={"status": "completed", "result": "fast done"},
+        )
+
+        r = await c.post(
+            "/api/v1/tasks",
+            headers=_auth(key_a),
+            json={"title": "downstream", "depends_on": [up]},
+        )
+        assert r.status_code == 201
+        assert r.json()["status"] == "pending"
+
+
 async def test_directed_assignment_validates_capabilities(two_agents):
     app, (key_a, _), (_, agent_b) = two_agents
     async with AsyncClient(

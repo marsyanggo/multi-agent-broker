@@ -63,6 +63,7 @@ CREATE TABLE IF NOT EXISTS tasks (
     notes TEXT NOT NULL DEFAULT '[]',
     required_all TEXT NOT NULL DEFAULT '[]',
     required_any TEXT NOT NULL DEFAULT '[]',
+    depends_on TEXT NOT NULL DEFAULT '[]',
     created_at TEXT NOT NULL,
     updated_at TEXT NOT NULL,
     completed_at TEXT
@@ -121,6 +122,7 @@ def _row_to_task(row: aiosqlite.Row) -> Task:
         notes=json.loads(row["notes"]),
         required_all=json.loads(row["required_all"]),
         required_any=json.loads(row["required_any"]),
+        depends_on=json.loads(row["depends_on"]),
         created_at=_parse_dt(row["created_at"]),
         updated_at=_parse_dt(row["updated_at"]),
         completed_at=_parse_dt(row["completed_at"]),
@@ -166,6 +168,10 @@ class Database:
         if "required_any" not in cols:
             await self.conn.execute(
                 "ALTER TABLE tasks ADD COLUMN required_any TEXT NOT NULL DEFAULT '[]'"
+            )
+        if "depends_on" not in cols:
+            await self.conn.execute(
+                "ALTER TABLE tasks ADD COLUMN depends_on TEXT NOT NULL DEFAULT '[]'"
             )
 
     # --- Agents ---
@@ -390,19 +396,27 @@ class Database:
         priority: TaskPriority = "normal",
         required_all: list[str] | None = None,
         required_any: list[str] | None = None,
+        depends_on: list[str] | None = None,
+        initial_status: TaskStatus | None = None,
     ) -> Task:
+        """Insert a task row. Caller is responsible for computing
+        `initial_status` based on dependency state (route layer handles that
+        so it can also do cycle detection + reject invalid deps before
+        anything hits the DB)."""
         task_id = short_uuid()
         now = utc_now()
-        status: TaskStatus = "assigned" if assigned_to else "pending"
         required_all = required_all or []
         required_any = required_any or []
+        depends_on = depends_on or []
+        if initial_status is None:
+            initial_status = "assigned" if assigned_to else "pending"
         await self.conn.execute(
             """
             INSERT INTO tasks
                 (id, title, description, created_by, assigned_to, status,
-                 priority, notes, required_all, required_any,
+                 priority, notes, required_all, required_any, depends_on,
                  created_at, updated_at)
-            VALUES (?, ?, ?, ?, ?, ?, ?, '[]', ?, ?, ?, ?)
+            VALUES (?, ?, ?, ?, ?, ?, ?, '[]', ?, ?, ?, ?, ?)
             """,
             (
                 task_id,
@@ -410,10 +424,11 @@ class Database:
                 description,
                 created_by,
                 assigned_to,
-                status,
+                initial_status,
                 priority,
                 json.dumps(required_all),
                 json.dumps(required_any),
+                json.dumps(depends_on),
                 _iso(now),
                 _iso(now),
             ),
@@ -425,10 +440,11 @@ class Database:
             description=description,
             created_by=created_by,
             assigned_to=assigned_to,
-            status=status,
+            status=initial_status,
             priority=priority,
             required_all=required_all,
             required_any=required_any,
+            depends_on=depends_on,
             created_at=now,
             updated_at=now,
         )
@@ -502,6 +518,21 @@ class Database:
         await cur.close()
         await self.conn.commit()
         return deleted
+
+    async def find_blocked_downstream(self, task_id: str) -> list[Task]:
+        """Find tasks whose `depends_on` contains `task_id` and whose status
+        is currently `blocked`. Used by the broker to cascade unblock / fail
+        events upstream → downstream."""
+        async with self.conn.execute(
+            "SELECT * FROM tasks WHERE status = 'blocked'"
+        ) as cur:
+            rows = await cur.fetchall()
+        result: list[Task] = []
+        for row in rows:
+            task = _row_to_task(row)
+            if task_id in task.depends_on:
+                result.append(task)
+        return result
 
     async def list_tasks(
         self,

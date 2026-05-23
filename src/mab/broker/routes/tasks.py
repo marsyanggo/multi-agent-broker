@@ -21,12 +21,71 @@ class CreateTaskRequest(BaseModel):
     priority: TaskPriority = "normal"
     required_all: list[str] = []
     required_any: list[str] = []
+    depends_on: list[str] = []
 
 
 class UpdateTaskRequest(BaseModel):
     status: TaskStatus | None = None
     result: str | None = None
     note: str | None = None
+
+
+async def _propagate_completion(
+    completed: Task, db: Database, hub: WebSocketHub
+) -> None:
+    """When `completed` enters status=completed, unblock downstream tasks
+    whose full dependency set is now satisfied. Emits task_event:created
+    via filter-broadcast for each newly-unblocked downstream task."""
+    candidates = await db.find_blocked_downstream(completed.id)
+    for downstream in candidates:
+        all_done = True
+        for dep_id in downstream.depends_on:
+            dep = await db.get_task(dep_id)
+            if dep is None or dep.status != "completed":
+                all_done = False
+                break
+        if not all_done:
+            continue
+
+        new_status: TaskStatus = "assigned" if downstream.assigned_to else "pending"
+        updated = await db.update_task(
+            downstream.id,
+            status=new_status,
+            note="dependencies satisfied, unblocked",
+        )
+        if updated is None:
+            continue
+        extra_targets: list[str] = []
+        if updated.assigned_to is None:
+            matched = await db.find_matching_agents(
+                required_all=updated.required_all,
+                required_any=updated.required_any,
+                status="online",
+            )
+            extra_targets = [a.id for a in matched]
+        await hub.emit_task_event("created", updated, extra_targets=extra_targets)
+
+
+async def _propagate_failure(
+    upstream: Task,
+    upstream_action: str,
+    db: Database,
+    hub: WebSocketHub,
+) -> None:
+    """When `upstream` enters a terminal failure state (failed or deleted),
+    cascade failure to all blocked downstream tasks. Recursive — the
+    cascaded failures further unblock-fail their own downstream."""
+    candidates = await db.find_blocked_downstream(upstream.id)
+    for downstream in candidates:
+        cascaded = await db.update_task(
+            downstream.id,
+            status="failed",
+            note=f"upstream dependency {upstream.id} {upstream_action}",
+        )
+        if cascaded is None:
+            continue
+        await hub.emit_task_event("failed", cascaded)
+        await _propagate_failure(cascaded, "failed (cascade)", db, hub)
 
 
 @router.post("", response_model=Task, status_code=201)
@@ -47,6 +106,35 @@ async def create_task(
                 status_code=400,
                 detail="assigned_to agent lacks required capabilities",
             )
+
+    # --- depends_on validation ---
+    initial_status: TaskStatus
+    if body.depends_on:
+        # Each referenced id must exist
+        dep_tasks = []
+        for dep_id in body.depends_on:
+            dep = await db.get_task(dep_id)
+            if dep is None:
+                raise HTTPException(
+                    status_code=400,
+                    detail=f"depends_on id '{dep_id}' not found",
+                )
+            if dep.status in ("failed", "deleted"):
+                raise HTTPException(
+                    status_code=400,
+                    detail=f"depends_on id '{dep_id}' is already {dep.status} — "
+                    "downstream task would never run",
+                )
+            dep_tasks.append(dep)
+        # Compute initial status based on whether all deps are done
+        all_done = all(d.status == "completed" for d in dep_tasks)
+        if all_done:
+            initial_status = "assigned" if body.assigned_to else "pending"
+        else:
+            initial_status = "blocked"
+    else:
+        initial_status = "assigned" if body.assigned_to else "pending"
+
     task = await db.create_task(
         title=body.title,
         description=body.description,
@@ -55,18 +143,24 @@ async def create_task(
         priority=body.priority,
         required_all=body.required_all,
         required_any=body.required_any,
+        depends_on=body.depends_on,
+        initial_status=initial_status,
     )
     if task.assigned_to:
         await db.set_current_task(task.assigned_to, task.id)
-    extra_targets: list[str] = []
-    if task.assigned_to is None:
-        matched = await db.find_matching_agents(
-            required_all=task.required_all,
-            required_any=task.required_any,
-            status="online",
-        )
-        extra_targets = [a.id for a in matched]
-    await hub.emit_task_event("created", task, extra_targets=extra_targets)
+
+    # Only broadcast task_event:created when the task is actually claimable.
+    # Blocked tasks stay invisible to workers until their deps complete.
+    if task.status != "blocked":
+        extra_targets: list[str] = []
+        if task.assigned_to is None:
+            matched = await db.find_matching_agents(
+                required_all=task.required_all,
+                required_any=task.required_any,
+                status="online",
+            )
+            extra_targets = [a.id for a in matched]
+        await hub.emit_task_event("created", task, extra_targets=extra_targets)
     return task
 
 
@@ -145,6 +239,8 @@ async def delete_task(
     if task.assigned_to:
         await db.set_current_task(task.assigned_to, None)
     await hub.emit_task_event("deleted", task)
+    # Cascade: downstream tasks blocked on this deleted one fail with note.
+    await _propagate_failure(task, "deleted", db, hub)
 
 
 @router.patch("/{task_id}", response_model=Task)
@@ -177,4 +273,13 @@ async def update_task(
         else "updated"
     )
     await hub.emit_task_event(event_name, updated)
+
+    # Dependency cascade: completion may unblock downstream tasks; failure
+    # may cascade through them. Both run AFTER the primary event is emitted
+    # so downstream observers see the original event first.
+    if updated.status == "completed":
+        await _propagate_completion(updated, db, hub)
+    elif updated.status == "failed":
+        await _propagate_failure(updated, "failed", db, hub)
+
     return updated
