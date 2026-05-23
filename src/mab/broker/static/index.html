@@ -1,0 +1,899 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>mab-broker dashboard</title>
+  <style>
+    *, *::before, *::after {
+      box-sizing: border-box;
+      margin: 0;
+      padding: 0;
+    }
+
+    html, body {
+      height: 100%;
+      overflow: hidden;
+      font-family: "Courier New", Courier, monospace;
+      color: #535353;
+      background: #fff;
+    }
+
+    body {
+      display: flex;
+      flex-direction: column;
+    }
+
+    /* ── Header ── */
+
+    #dashboard-header {
+      display: flex;
+      align-items: center;
+      height: 50px;
+      padding: 0 16px;
+      gap: 8px;
+      border-bottom: 1px solid #ccc;
+      flex-shrink: 0;
+      background: #fff;
+    }
+
+    #dashboard-title {
+      font-size: 14px;
+      font-weight: bold;
+      letter-spacing: 0.06em;
+      margin-right: 8px;
+      white-space: nowrap;
+    }
+
+    #ws-status {
+      font-size: 18px;
+      line-height: 1;
+      color: #999;
+      flex-shrink: 0;
+    }
+
+    #ws-status.ws-connected    { color: #2ecc71; }
+    #ws-status.ws-disconnected { color: #999;    }
+
+    #ws-status-text {
+      font-size: 12px;
+      flex-shrink: 0;
+    }
+
+    #dashboard-clock {
+      margin-left: auto;
+      font-size: 12px;
+      white-space: nowrap;
+    }
+
+    /* ── Main grid ── */
+
+    main {
+      flex: 1;
+      min-height: 0;
+      display: grid;
+      grid-template-columns: 1fr 2fr 1fr;
+      grid-template-rows: 1fr 1fr;
+      grid-template-areas:
+        "agents  tasks    channels"
+        "agents  graph    contexts";
+      background: #ccc;
+      gap: 1px;
+    }
+
+    /* ── Panels ── */
+
+    .panel {
+      background: #fff;
+      display: flex;
+      flex-direction: column;
+      overflow: hidden;
+      min-height: 0;
+    }
+
+    .panel h2 {
+      font-size: 11px;
+      font-weight: bold;
+      text-transform: uppercase;
+      letter-spacing: 0.1em;
+      padding: 8px 12px;
+      border-bottom: 1px solid #ccc;
+      flex-shrink: 0;
+      color: #535353;
+    }
+
+    .panel > div:not(.filter-bar) {
+      flex: 1;
+      overflow-y: auto;
+      padding: 8px 12px;
+      font-size: 12px;
+      min-height: 0;
+    }
+
+    .filter-bar {
+      flex: 0 0 auto;
+      padding: 6px 12px;
+      border-bottom: 1px solid #ccc;
+      font-size: 12px;
+      overflow: hidden;
+    }
+
+    #tasks-graph-panel svg {
+      flex: 1;
+      min-height: 0;
+      display: block;
+      width: 100%;
+      overflow: auto;
+    }
+
+    /* ── Grid area assignments ── */
+
+    #agents-panel      { grid-area: agents;   }
+    #tasks-panel       { grid-area: tasks;    }
+    #tasks-graph-panel { grid-area: graph;    }
+    #channels-panel    { grid-area: channels; }
+    #contexts-panel    { grid-area: contexts; }
+
+    /* ── Status classes (consumed by injected panel JS) ── */
+
+    .ws-connected    { color: #2ecc71; }
+    .ws-disconnected { color: #999;    }
+
+    .status-idle    { color: #2ecc71; }
+    .status-busy    { color: #f39c12; }
+    .status-offline { color: #999;    }
+  </style>
+</head>
+<body>
+
+  <header id="dashboard-header">
+    <h1 id="dashboard-title">mab-broker dashboard</h1>
+    <span id="ws-status">●</span>
+    <span id="ws-status-text">connecting…</span>
+    <span id="dashboard-clock"></span>
+  </header>
+
+  <main>
+
+    <section id="agents-panel" class="panel">
+      <h2>Agents</h2>
+      <div id="agents-list"></div>
+    </section>
+
+    <section id="tasks-panel" class="panel">
+      <h2>Tasks</h2>
+      <div class="filter-bar" id="tasks-filter"></div>
+      <div id="tasks-list"></div>
+    </section>
+
+    <section id="tasks-graph-panel" class="panel">
+      <h2>Task graph (depends_on)</h2>
+      <svg id="tasks-graph" width="100%" height="300"></svg>
+    </section>
+
+    <section id="channels-panel" class="panel">
+      <h2>Channels</h2>
+      <div id="channels-list"></div>
+    </section>
+
+    <section id="contexts-panel" class="panel">
+      <h2>Contexts</h2>
+      <div id="contexts-list"></div>
+    </section>
+
+  </main>
+
+  <script>
+// === 5a-4 agents panel ===
+
+function renderAgentsPanel(snapshot) {
+  const container = document.getElementById('agents-list');
+  container.innerHTML = '';
+
+  if (!snapshot.agents || snapshot.agents.length === 0) {
+    const empty = document.createElement('div');
+    empty.style.cssText = 'color:#999;font-style:italic;';
+    empty.textContent = '(no agents)';
+    container.appendChild(empty);
+    return;
+  }
+
+  function formatAge(seconds, isStale) {
+    const prefix = isStale ? 'stale ' : '';
+    if (seconds < 60) return prefix + Math.floor(seconds) + 's ago';
+    if (seconds < 3600) return prefix + Math.floor(seconds / 60) + 'm ago';
+    return prefix + Math.floor(seconds / 3600) + 'h ago';
+  }
+
+  function extractTag(capabilities) {
+    const tier = capabilities.find(c => c.startsWith('tier:'));
+    if (tier) return tier.slice(5);
+    const model = capabilities.find(c => c.startsWith('model:'));
+    if (model) return model.slice(6);
+    return '';
+  }
+
+  function dotColor(agent) {
+    if (agent.is_stale || agent.status === 'offline') return '#999';
+    if (agent.status === 'busy') return '#f39c12';
+    return '#2ecc71';
+  }
+
+  snapshot.agents.forEach((agent, i) => {
+    const row = document.createElement('div');
+    row.style.cssText = 'display:flex;gap:8px;align-items:baseline;padding:6px 0;border-bottom:1px solid #eee;';
+
+    const dot = document.createElement('span');
+    dot.style.cssText = 'font-size:14px;color:' + dotColor(agent) + ';';
+    dot.textContent = '●';
+
+    const name = document.createElement('span');
+    name.style.cssText = 'font-weight:bold;font-size:13px;font-family:monospace;';
+    name.textContent = agent.name;
+
+    const tag = document.createElement('span');
+    tag.style.cssText = 'font-size:11px;color:#777;';
+    tag.textContent = extractTag(agent.capabilities);
+
+    const statusSpan = document.createElement('span');
+    statusSpan.style.cssText = 'font-size:11px;color:' + (agent.current_task ? '#e67e22' : '#999') + ';';
+    statusSpan.textContent = agent.current_task ? 'working' : 'idle';
+
+    const hb = document.createElement('span');
+    hb.style.cssText = 'margin-left:auto;font-size:11px;color:#999;';
+    hb.textContent = formatAge(agent.last_heartbeat_age_seconds, agent.is_stale);
+
+    row.appendChild(dot);
+    row.appendChild(name);
+    if (tag.textContent) row.appendChild(tag);
+    row.appendChild(statusSpan);
+    row.appendChild(hb);
+
+    container.appendChild(row);
+  });
+}
+
+// === 5a-5 tasks panel ===
+
+let currentFilter = 'all';
+const expandedTasks = new Set();
+let _tasks = [];
+
+const _STATUS_COLORS = {
+  pending: '#3498db',
+  assigned: '#f39c12',
+  in_progress: '#f39c12',
+  completed: '#2ecc71',
+  failed: '#e74c3c',
+  blocked: '#999',
+};
+
+const _FILTER_ORDER = ['all', 'pending', 'blocked', 'in_progress', 'completed', 'failed'];
+
+function _applyBtnStyle(btn, active) {
+  btn.style.background = active ? '#535353' : '#fff';
+  btn.style.color = active ? '#fff' : '#535353';
+  btn.style.border = '1px solid ' + (active ? '#535353' : '#ccc');
+}
+
+function _buildDetailPanel(task) {
+  const panel = document.createElement('div');
+  panel.style.cssText = 'padding:8px 12px;background:#f9f9f9;border-bottom:1px solid #eee;font-size:12px;line-height:1.5;';
+
+  if (task.description) {
+    const descDiv = document.createElement('div');
+    descDiv.style.marginBottom = '6px';
+    if (task.description.length > 200) {
+      let collapsed = true;
+      const preview = document.createElement('span');
+      preview.textContent = task.description.substring(0, 200) + '\u2026 ';
+      const full = document.createElement('span');
+      full.textContent = task.description + ' ';
+      full.style.display = 'none';
+      const toggle = document.createElement('a');
+      toggle.href = '#';
+      toggle.textContent = 'show more';
+      toggle.style.cssText = 'color:#3498db;cursor:pointer;';
+      toggle.addEventListener('click', e => {
+        e.preventDefault();
+        e.stopPropagation();
+        collapsed = !collapsed;
+        preview.style.display = collapsed ? '' : 'none';
+        full.style.display = collapsed ? 'none' : '';
+        toggle.textContent = collapsed ? 'show more' : 'show less';
+      });
+      descDiv.appendChild(preview);
+      descDiv.appendChild(full);
+      descDiv.appendChild(toggle);
+    } else {
+      descDiv.textContent = task.description;
+    }
+    panel.appendChild(descDiv);
+  }
+
+  if (task.result) {
+    const resultDiv = document.createElement('div');
+    resultDiv.style.marginBottom = '6px';
+    const label = document.createElement('strong');
+    label.textContent = 'Result: ';
+    resultDiv.appendChild(label);
+    resultDiv.appendChild(document.createTextNode(task.result));
+    panel.appendChild(resultDiv);
+  }
+
+  if (task.notes && task.notes.length > 0) {
+    const notesHead = document.createElement('div');
+    notesHead.style.marginBottom = '2px';
+    const notesLabel = document.createElement('strong');
+    notesLabel.textContent = 'Notes:';
+    notesHead.appendChild(notesLabel);
+    panel.appendChild(notesHead);
+    const ul = document.createElement('ul');
+    ul.style.cssText = 'margin:0;padding-left:18px;';
+    task.notes.forEach(note => {
+      const li = document.createElement('li');
+      li.textContent = note;
+      ul.appendChild(li);
+    });
+    panel.appendChild(ul);
+  }
+
+  return panel;
+}
+
+function _renderList(tasks) {
+  const container = document.getElementById('tasks-list');
+  container.innerHTML = '';
+
+  if (tasks.length === 0) {
+    const msg = document.createElement('div');
+    msg.style.cssText = 'color:#999;font-style:italic;padding:8px 0;';
+    msg.textContent = '(no tasks yet)';
+    container.appendChild(msg);
+    return;
+  }
+
+  const filtered = currentFilter === 'all'
+    ? tasks.slice()
+    : tasks.filter(t => t.status === currentFilter);
+
+  if (filtered.length === 0) {
+    const msg = document.createElement('div');
+    msg.style.cssText = 'color:#999;font-style:italic;padding:8px 0;';
+    msg.textContent = '(no tasks match "' + currentFilter + '")';
+    container.appendChild(msg);
+    return;
+  }
+
+  filtered.sort((a, b) => new Date(b.updated_at) - new Date(a.updated_at));
+
+  filtered.forEach(task => {
+    const wrapper = document.createElement('div');
+
+    const row = document.createElement('div');
+    row.style.cssText = 'display:flex;align-items:center;gap:8px;padding:6px;border-bottom:1px solid #eee;cursor:pointer;user-select:none;';
+
+    const badge = document.createElement('span');
+    badge.textContent = task.status.toUpperCase();
+    badge.style.cssText = 'background:' + (_STATUS_COLORS[task.status] || '#999') + ';color:#fff;font-size:9px;padding:2px 6px;border-radius:3px;font-weight:bold;white-space:nowrap;';
+    row.appendChild(badge);
+
+    const shortId = document.createElement('span');
+    shortId.textContent = task.id.substring(0, 8);
+    shortId.style.cssText = 'font-family:monospace;font-size:11px;color:#888;white-space:nowrap;';
+    row.appendChild(shortId);
+
+    const titleSpan = document.createElement('span');
+    titleSpan.textContent = task.title.length > 50 ? task.title.substring(0, 50) + '\u2026' : task.title;
+    titleSpan.style.cssText = 'font-size:13px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;flex:1;min-width:0;';
+    row.appendChild(titleSpan);
+
+    if (task.depends_on && task.depends_on.length > 0) {
+      const deps = document.createElement('span');
+      deps.textContent = '\u21E0' + task.depends_on.length;
+      deps.style.cssText = 'font-size:11px;color:#999;white-space:nowrap;';
+      row.appendChild(deps);
+    }
+
+    const assignedSpan = document.createElement('span');
+    assignedSpan.textContent = task.assigned_to ? task.assigned_to.substring(0, 8) : 'unassigned';
+    assignedSpan.style.cssText = 'margin-left:auto;font-size:11px;color:#888;white-space:nowrap;';
+    row.appendChild(assignedSpan);
+
+    wrapper.appendChild(row);
+
+    if (expandedTasks.has(task.id)) {
+      wrapper.appendChild(_buildDetailPanel(task));
+    }
+
+    row.addEventListener('click', () => {
+      if (expandedTasks.has(task.id)) {
+        expandedTasks.delete(task.id);
+        if (wrapper.children.length > 1) {
+          wrapper.removeChild(wrapper.lastChild);
+        }
+      } else {
+        expandedTasks.add(task.id);
+        wrapper.appendChild(_buildDetailPanel(task));
+      }
+    });
+
+    container.appendChild(wrapper);
+  });
+}
+
+function renderTasksPanel(snapshot) {
+  _tasks = (snapshot && Array.isArray(snapshot.tasks)) ? snapshot.tasks : [];
+
+  const filterContainer = document.getElementById('tasks-filter');
+  filterContainer.innerHTML = '';
+
+  const statusCounts = {};
+  _tasks.forEach(t => {
+    statusCounts[t.status] = (statusCounts[t.status] || 0) + 1;
+  });
+
+  _FILTER_ORDER.forEach(status => {
+    const btn = document.createElement('button');
+    btn.dataset.filterStatus = status;
+    const count = status === 'all' ? _tasks.length : (statusCounts[status] || 0);
+    btn.textContent = (status === 'all' ? 'All' : status) + ' (' + count + ')';
+    btn.style.cssText = 'padding:4px 10px;margin-right:4px;cursor:pointer;font-size:12px;border-radius:3px;';
+    _applyBtnStyle(btn, currentFilter === status);
+
+    btn.addEventListener('click', () => {
+      currentFilter = status;
+      document.getElementById('tasks-filter').querySelectorAll('button[data-filter-status]').forEach(b => {
+        _applyBtnStyle(b, b.dataset.filterStatus === currentFilter);
+      });
+      _renderList(_tasks);
+    });
+
+    filterContainer.appendChild(btn);
+  });
+
+  _renderList(_tasks);
+}
+
+// === 5a-6 task graph SVG ===
+
+function renderTaskGraph(snapshot) {
+  const SVG_NS = "http://www.w3.org/2000/svg";
+  const svg = document.getElementById("tasks-graph");
+  while (svg.firstChild) svg.removeChild(svg.firstChild);
+
+  const now = Date.now();
+  const ONE_HOUR = 3600 * 1000;
+  const nonTerminal = new Set(["pending", "assigned", "in_progress", "blocked", "failed"]);
+
+  // Build id → task map
+  const tasksArray = Array.isArray(snapshot) ? snapshot : snapshot.tasks || [];
+  const idToTask = new Map();
+  for (const t of tasksArray) idToTask.set(t.id, t);
+
+  // Reverse adjacency (who depends on me)
+  const dependents = new Map(); // id -> Set of task ids that depend on it
+  for (const t of tasksArray) {
+    const deps = t.depends_on || [];
+    for (const d of deps) {
+      if (!dependents.has(d)) dependents.set(d, new Set());
+      dependents.get(d).add(t.id);
+    }
+  }
+
+  // Initial inclusion based on status & recency
+  const included = new Set();
+  for (const t of tasksArray) {
+    if (nonTerminal.has(t.status)) {
+      included.add(t.id);
+    } else if (t.status === "completed") {
+      const updated = new Date(t.updated_at).getTime();
+      if (now - updated <= ONE_HOUR) included.add(t.id);
+    }
+  }
+
+  // Add completed tasks that have a non‑terminal dependent
+  for (const t of tasksArray) {
+    if (t.status !== "completed") continue;
+    const deps = dependents.get(t.id);
+    if (!deps) continue;
+    for (const depId of deps) {
+      const depTask = idToTask.get(depId);
+      if (depTask && nonTerminal.has(depTask.status)) {
+        included.add(t.id);
+        break;
+      }
+    }
+  }
+
+  // Keep only most‑recent 50 after filtering
+  const filtered = Array.from(included)
+    .map(id => idToTask.get(id))
+    .filter(Boolean)
+    .sort((a, b) => new Date(b.updated_at) - new Date(a.updated_at))
+    .slice(0, 50);
+  const finalSet = new Set(filtered.map(t => t.id));
+
+  if (filtered.length === 0) {
+    const msg = document.createElementNS(SVG_NS, "text");
+    msg.setAttribute("x", "10");
+    msg.setAttribute("y", "20");
+    msg.setAttribute("fill", "#999");
+    msg.setAttribute("font-style", "italic");
+    msg.textContent = "(no task graph to show)";
+    svg.appendChild(msg);
+    return;
+  }
+
+  // Compute layers (longest path from roots)
+  const layerMemo = new Map();
+  function getLayer(id) {
+    if (layerMemo.has(id)) return layerMemo.get(id);
+    const task = idToTask.get(id);
+    const deps = (task && task.depends_on) || [];
+    let maxDepLayer = -1;
+    for (const d of deps) {
+      if (!finalSet.has(d)) continue;
+      const l = getLayer(d);
+      if (l > maxDepLayer) maxDepLayer = l;
+    }
+    const layer = maxDepLayer + 1;
+    layerMemo.set(id, layer);
+    return layer;
+  }
+
+  const tasksWithLayers = filtered.map(t => ({
+    task: t,
+    layer: getLayer(t.id)
+  }));
+
+  // Group by layer and sort within layer by updated_at asc
+  const layersMap = new Map(); // layer -> array of {task,layer}
+  let maxLayer = 0;
+  for (const obj of tasksWithLayers) {
+    const arr = layersMap.get(obj.layer) || [];
+    arr.push(obj);
+    layersMap.set(obj.layer, arr);
+    if (obj.layer > maxLayer) maxLayer = obj.layer;
+  }
+
+  const layers = [];
+  for (let i = 0; i <= maxLayer; i++) {
+    const arr = layersMap.get(i) || [];
+    arr.sort((a, b) => new Date(a.task.updated_at) - new Date(b.task.updated_at));
+    layers.push(arr);
+  }
+
+  const maxRows = Math.max(...layers.map(l => l.length));
+
+  // Geometry constants
+  const BOX_W = 120;
+  const BOX_H = 32;
+  const H_GAP = 30;
+  const V_GAP = 8;
+
+  const totalWidth = layers.length * (BOX_W + H_GAP) - H_GAP;
+  const totalHeight = maxRows * (BOX_H + V_GAP) - V_GAP;
+
+  svg.setAttribute("viewBox", `0 0 ${totalWidth} ${totalHeight}`);
+  svg.setAttribute("preserveAspectRatio", "xMidYMid meet");
+
+  // Define arrow marker
+  const defs = document.createElementNS(SVG_NS, "defs");
+  const marker = document.createElementNS(SVG_NS, "marker");
+  marker.setAttribute("id", "arrow");
+  marker.setAttribute("viewBox", "0 -5 10 10");
+  marker.setAttribute("refX", "10");
+  marker.setAttribute("refY", "0");
+  marker.setAttribute("markerWidth", "6");
+  marker.setAttribute("markerHeight", "6");
+  marker.setAttribute("orient", "auto");
+  const arrowPath = document.createElementNS(SVG_NS, "path");
+  arrowPath.setAttribute("d", "M0,-5L10,0L0,5");
+  arrowPath.setAttribute("fill", "#999");
+  marker.appendChild(arrowPath);
+  defs.appendChild(marker);
+  svg.appendChild(defs);
+
+  // Helper to get fill/stroke by status
+  function styleFor(status) {
+    switch (status) {
+      case "pending":
+        return { fill: "white", stroke: "#3498db" };
+      case "assigned":
+      case "in_progress":
+        return { fill: "#fef3e0", stroke: "#f39c12" };
+      case "completed":
+        return { fill: "#e8f8e8", stroke: "#2ecc71" };
+      case "failed":
+        return { fill: "#fde8e8", stroke: "#e74c3c" };
+      case "blocked":
+        return { fill: "#eee", stroke: "#999" };
+      default:
+        return { fill: "#fff", stroke: "#535353" };
+    }
+  }
+
+  // Store positions for link drawing
+  const posMap = new Map(); // id -> {x,y}
+  // Render boxes & texts
+  layers.forEach((layerArr, layerIdx) => {
+    layerArr.forEach((obj, rowIdx) => {
+      const t = obj.task;
+      const x = layerIdx * (BOX_W + H_GAP);
+      const y = rowIdx * (BOX_H + V_GAP);
+      posMap.set(t.id, { x, y });
+
+      const { fill, stroke } = styleFor(t.status);
+      const rect = document.createElementNS(SVG_NS, "rect");
+      rect.setAttribute("x", x);
+      rect.setAttribute("y", y);
+      rect.setAttribute("width", BOX_W);
+      rect.setAttribute("height", BOX_H);
+      rect.setAttribute("fill", fill);
+      rect.setAttribute("stroke", stroke);
+      rect.setAttribute("stroke-width", "1");
+
+      const title = document.createElementNS(SVG_NS, "title");
+      const shortId = t.id ? t.id.slice(0, 8) : "";
+      title.textContent = `${t.title} – ${t.status} – ${shortId}`;
+      rect.appendChild(title);
+
+      const txt = document.createElementNS(SVG_NS, "text");
+      txt.setAttribute("x", x + BOX_W / 2);
+      txt.setAttribute("y", y + BOX_H / 2);
+      txt.setAttribute("font-family", "monospace");
+      txt.setAttribute("font-size", "10");
+      txt.setAttribute("fill", "#535353");
+      txt.setAttribute("text-anchor", "middle");
+      txt.setAttribute("dominant-baseline", "middle");
+      let disp = t.title || "";
+      if (disp.length > 14) disp = disp.slice(0, 14) + "…";
+      txt.textContent = disp;
+
+      svg.appendChild(rect);
+      svg.appendChild(txt);
+    });
+  });
+
+  // Render arrows
+  filtered.forEach(t => {
+    const deps = t.depends_on || [];
+    const targetPos = posMap.get(t.id);
+    if (!targetPos) return;
+    deps.forEach(did => {
+      if (!finalSet.has(did)) return;
+      const srcPos = posMap.get(did);
+      if (!srcPos) return;
+      const line = document.createElementNS(SVG_NS, "line");
+      line.setAttribute("x1", srcPos.x + BOX_W);
+      line.setAttribute("y1", srcPos.y + BOX_H / 2);
+      line.setAttribute("x2", targetPos.x);
+      line.setAttribute("y2", targetPos.y + BOX_H / 2);
+      line.setAttribute("stroke", "#999");
+      line.setAttribute("stroke-width", "1");
+      line.setAttribute("marker-end", "url(#arrow)");
+      svg.appendChild(line);
+    });
+  });
+}
+
+// === 5a-7 channels + contexts panels ===
+
+const _expandedContextIds = new Set();
+
+function relativeTime(iso) {
+  const sec = Math.floor((Date.now() - new Date(iso).getTime()) / 1000);
+  if (sec < 60) return `${sec}s ago`;
+  if (sec < 3600) return `${Math.floor(sec / 60)}m ago`;
+  if (sec < 86400) return `${Math.floor(sec / 3600)}h ago`;
+  return `${Math.floor(sec / 86400)}d ago`;
+}
+
+function formatSize(n) {
+  return n > 1000 ? `${(n / 1000).toFixed(1)}k` : `${n}`;
+}
+
+function renderChannelsPanel(snapshot) {
+  const container = document.getElementById('channels-list');
+  if (!container) return;
+  container.innerHTML = '';
+
+  const channels = (snapshot.channels || []).slice().sort((a, b) =>
+    new Date(b.channel.created_at) - new Date(a.channel.created_at)
+  );
+
+  if (channels.length === 0) {
+    const empty = document.createElement('div');
+    empty.style.cssText = 'font-style:italic;color:#999;font-size:12px;padding:6px 0;';
+    empty.textContent = '(no channels)';
+    container.appendChild(empty);
+    return;
+  }
+
+  for (const item of channels) {
+    const { channel, member_count, message_count } = item;
+
+    const row = document.createElement('div');
+    row.style.cssText = 'border-bottom:1px solid #eee;padding:6px 0;font-size:12px;';
+
+    const line1 = document.createElement('div');
+    line1.style.cssText = 'display:flex;justify-content:space-between;align-items:baseline;';
+
+    const nameEl = document.createElement('span');
+    nameEl.style.cssText = 'font-weight:bold;font-family:monospace;';
+    nameEl.textContent = `#${channel.name}`;
+
+    const metaEl = document.createElement('span');
+    metaEl.style.cssText = 'color:#999;font-size:11px;white-space:nowrap;margin-left:8px;';
+    metaEl.textContent = `${member_count} members · ${message_count} msgs`;
+
+    line1.appendChild(nameEl);
+    line1.appendChild(metaEl);
+    row.appendChild(line1);
+
+    if (channel.description) {
+      const line2 = document.createElement('div');
+      line2.style.cssText = 'font-size:11px;color:#999;font-style:italic;margin-top:2px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;';
+      const desc = channel.description.length > 80
+        ? channel.description.slice(0, 80) + '…'
+        : channel.description;
+      line2.textContent = desc;
+      row.appendChild(line2);
+    }
+
+    container.appendChild(row);
+  }
+}
+
+function renderContextsPanel(snapshot) {
+  const container = document.getElementById('contexts-list');
+  if (!container) return;
+  container.innerHTML = '';
+
+  const contexts = (snapshot.contexts || []).slice().sort((a, b) =>
+    new Date(b.updated_at) - new Date(a.updated_at)
+  );
+
+  if (contexts.length === 0) {
+    const empty = document.createElement('div');
+    empty.style.cssText = 'font-style:italic;color:#999;font-size:12px;padding:6px 0;';
+    empty.textContent = '(no contexts)';
+    container.appendChild(empty);
+    return;
+  }
+
+  for (const ctx of contexts) {
+    const wrapper = document.createElement('div');
+    wrapper.style.cssText = 'border-bottom:1px solid #eee;';
+
+    const row = document.createElement('div');
+    row.style.cssText = 'padding:6px 0;font-size:12px;cursor:pointer;';
+
+    const line1 = document.createElement('div');
+    line1.style.cssText = 'display:flex;justify-content:space-between;align-items:baseline;';
+
+    const nameEl = document.createElement('span');
+    nameEl.style.cssText = 'font-weight:bold;font-family:monospace;';
+    nameEl.textContent = ctx.name;
+
+    const sizeEl = document.createElement('span');
+    sizeEl.style.cssText = 'color:#999;font-size:11px;white-space:nowrap;margin-left:8px;';
+    sizeEl.textContent = `${formatSize(ctx.content.length)} chars`;
+
+    line1.appendChild(nameEl);
+    line1.appendChild(sizeEl);
+    row.appendChild(line1);
+
+    const line2 = document.createElement('div');
+    line2.style.cssText = 'font-size:11px;color:#999;margin-top:2px;';
+    line2.textContent = `${ctx.content_type} · created ${relativeTime(ctx.created_at)}`;
+    row.appendChild(line2);
+
+    if (ctx.task_id) {
+      const line3 = document.createElement('div');
+      line3.style.cssText = 'font-size:10px;color:#bbb;margin-top:2px;';
+      line3.textContent = `linked to task ${ctx.task_id.slice(0, 8)}`;
+      row.appendChild(line3);
+    }
+
+    const preview = document.createElement('pre');
+    preview.style.cssText = 'white-space:pre-wrap;font-size:11px;font-family:monospace;background:#f8f8f8;padding:8px;margin:0 0 4px 0;display:none;overflow:auto;';
+    preview.textContent = ctx.content.slice(0, 200);
+
+    if (_expandedContextIds.has(ctx.id)) {
+      preview.style.display = 'block';
+    }
+
+    row.addEventListener('click', () => {
+      if (_expandedContextIds.has(ctx.id)) {
+        _expandedContextIds.delete(ctx.id);
+        preview.style.display = 'none';
+      } else {
+        _expandedContextIds.add(ctx.id);
+        preview.style.display = 'block';
+      }
+    });
+
+    wrapper.appendChild(row);
+    wrapper.appendChild(preview);
+    container.appendChild(wrapper);
+  }
+}
+
+// === driver (5a-8) ===
+
+
+// ── Top-level driver: api-key + poll loop ──
+const API_KEY_STORAGE = 'mab-api-key';
+let API_KEY = localStorage.getItem(API_KEY_STORAGE) || '';
+
+function promptForKey() {
+  const k = prompt('Enter mab-broker API key (mab-ak-...):', API_KEY);
+  if (k) {
+    API_KEY = k.trim();
+    localStorage.setItem(API_KEY_STORAGE, API_KEY);
+  }
+}
+
+if (!API_KEY) promptForKey();
+
+const STATUS_DOT = document.getElementById('ws-status');
+const STATUS_TEXT = document.getElementById('ws-status-text');
+const CLOCK = document.getElementById('dashboard-clock');
+
+function setStatus(connected, msg) {
+  STATUS_DOT.classList.toggle('ws-connected', connected);
+  STATUS_DOT.classList.toggle('ws-disconnected', !connected);
+  STATUS_TEXT.textContent = msg;
+}
+
+setInterval(() => {
+  CLOCK.textContent = new Date().toLocaleTimeString();
+}, 1000);
+
+async function poll() {
+  if (!API_KEY) {
+    setStatus(false, 'no api key');
+    return;
+  }
+  try {
+    const r = await fetch('/api/v1/dashboard/snapshot', {
+      headers: { 'Authorization': 'Bearer ' + API_KEY },
+    });
+    if (r.status === 401) {
+      setStatus(false, '401 unauthorized — bad key');
+      localStorage.removeItem(API_KEY_STORAGE);
+      API_KEY = '';
+      return;
+    }
+    if (!r.ok) {
+      setStatus(false, 'http ' + r.status);
+      return;
+    }
+    const snapshot = await r.json();
+    setStatus(true, 'live');
+    renderAgentsPanel(snapshot);
+    renderTasksPanel(snapshot);
+    renderTaskGraph(snapshot);
+    renderChannelsPanel(snapshot);
+    renderContextsPanel(snapshot);
+  } catch (e) {
+    setStatus(false, 'fetch error: ' + e.message);
+  }
+}
+
+poll();
+setInterval(poll, 1000);
+
+document.getElementById('dashboard-title').style.cursor = 'pointer';
+document.getElementById('dashboard-title').title = 'Click to re-enter API key';
+document.getElementById('dashboard-title').addEventListener('click', () => {
+  promptForKey();
+  poll();
+});
+
+  </script>
+
+</body>
+</html>

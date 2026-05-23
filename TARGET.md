@@ -360,7 +360,69 @@ Lead 派完 3 個 task 就 done — broker 串行 gate、自動 cap routing、�
 
 ---
 
+## Phase 3 — Reliability hardening (supersede race)
+
+### 背景
+
+兩個 mab-agent 共用同個 api-key 時（典型 case：上一個 Claude Code window 沒清乾淨就開新的）broker 1-WS-per-agent rule 用 close code 4002 "superseded" 把舊 WS 踢掉。原本兩個 bug 互相強化造成 reconnect storm：
+- Broker 端 WS endpoint 的 finally clause 無條件 set status=offline，會蓋掉新 WS 才剛 set 的 online
+- Client 端 `_run_ws_loop` 收到 4002 close 後一視同仁 backoff retry，再連回去又把對方踢掉，兩邊互踢無限循環
+
+### Sub-tasks
+
+- [x] Kill orphan mab-agent PID 46958（昨天 Claude window crash 留下的 20h zombie 是 reconnect storm 根因）
+- [x] Broker fix — `WebSocketHub.disconnect()` 回 bool 表示自己是否仍是 active WS；endpoint finally 只在 `was_active=True` 時才 flip status=offline
+- [x] Client fix — `BrokerClient._run_ws_loop` 偵測 `ConnectionClosed.rcvd.code == 4002` → log + `_stop_evt.set()` + break，不再 reconnect 製造 flap loop
+- [x] 新 test `test_ws_supersede_keeps_status_online`（188 → 189 tests，全綠）
+- [x] Commit `38e3869` 推上 GitHub main
+- [x] 212 broker 升級 `./deploy/update.sh`（Phase 3 S/CH 後端 + supersede fix 一起 ship 上 production，broker openapi 9 → 16 paths）
+
+---
+
+## Phase 5a — Read-only web dashboard (MVP)
+
+目標：把 broker 即時狀態（agents / tasks / channels / contexts）攤在一個瀏覽器頁面上，read-only。看 task graph (depends_on) 視覺化、看 agent 狀態圈跟著 WS push 即時變色。寫操作（dispatch/claim/delete）留到 5b，全文檢索留到 5c。
+
+### 決策（已鎖定）
+
+| 項目 | 決定 |
+|------|------|
+| Frontend stack | Vanilla HTML+JS+CSS — no build step、no framework、no `node_modules`。Task graph 用 SVG（5-50 node 不需要 d3）|
+| 部署 | Bundled into broker — FastAPI 多掛 `/dashboard` static + 必要 admin routes，同 process / 同 port (8420) |
+| Real-time | **MVP**: polling `GET /dashboard/snapshot` every 1s — simpler，避免改 broker envelope routing。**Enhancement (later)**: 加 admin WS broadcast 把 task_event/channel_message 也 push 給 `dashboard` pseudo-agent，砍掉 polling 過渡到 push-driven |
+| Auth | Bearer token（同 mab-ak-* api key）— dashboard 開啟時用 query param 或 localStorage 帶 |
+| 寫操作 | 5a 不做 — 純讀。所有 mutation 都是 5b 範圍 |
+
+### Sub-tasks
+
+格式：`owner` = 預計派給誰，`elapsed` = 從 in_progress → completed 的 wall-clock。`-` 表示尚未開始。
+
+- [x] **5a-1.** Backend: FastAPI 掛 `/dashboard` static + `GET /api/v1/dashboard/snapshot` 一次拉全狀態（agents/tasks/channels-summary/contexts/server_time）+ 3 個 pytest（unauth / shape / populated state，192 tests 全綠）
+      _owner: claude-mac (opus) | elapsed: ~10m_
+- [x] **5a-2.** Backend: ~~dashboard pseudo-agent + admin WS~~ → **scope cut, deferred to enhancement**。MVP 用 1s polling /snapshot 取代，避免改 broker envelope routing。Frontend 用任何 valid api-key 走 REST 即可
+      _owner: claude-mac (opus) | elapsed: 0m (deferred)_
+- [x] **5a-3.** Frontend: HTML + CSS skeleton（2×2 panel grid + header bar，monospace + monochrome 配色跟 cookbook 同調）
+      _owner: worker-claude-sonnet (sonnet) | elapsed: 2m18s | broker task `70d235ba`_
+- [x] **5a-4.** Frontend: agents panel — `renderAgentsPanel(snapshot)` 渲染 status dot / name / tier tag / current_task / heartbeat freshness
+      _owner: worker-claude-sonnet (sonnet) | elapsed: 13s | broker task `0d3eccdf` | quirk: 輸出含 ```javascript markdown fence（違反 contract），splice 時 strip 掉_
+- [x] **5a-5.** Frontend: tasks panel — `renderTasksPanel(snapshot)` filter bar + task list + click-toggle detail panel
+      _owner: worker-claude-sonnet (sonnet) | elapsed: 109s | broker task `32efc7a6`_
+- [x] **5a-6.** Frontend: task graph SVG renderer — `renderTaskGraph(snapshot)` 層級拓樸 layout、SVG box+arrow、status color、hover tooltip
+      _owner: worker-gpt-oss-cloud (reasoning) | elapsed: 20s | broker task `9b2e70b4`_
+- [x] **5a-7.** Frontend: channels + contexts side panels — `renderChannelsPanel` + `renderContextsPanel` + relative-time helper，contexts 可點開 preview
+      _owner: worker-claude-sonnet (sonnet) | elapsed: 67s | broker task `d53a4256` | quirk: 同 5a-4 markdown fence，strip 掉_
+- [ ] **5a-8.** Integration: 拼接 5a-3 HTML shell + 5a-4/5/6/7 JS modules + driver (api-key prompt + 1s poll loop)，strip fence quirk，寫到 `src/mab/broker/static/index.html` (27818 chars)；local broker port 8421 smoke test：`/dashboard/` HTTP 200、`/api/v1/dashboard/snapshot` HTTP 401 (auth working)；**剩**：212 broker upgrade + browser 真實驗證
+      _owner: claude-mac (opus) | elapsed: ~15m so far_
+
+### 後續 increments（placeholder）
+
+- **Phase 5b — Write actions** — dispatch task / claim / delete / send message / post channel msg 從 UI 操作
+- **Phase 5c — Full-text search** — SQLite FTS5 index over messages + task descriptions/results + channel messages + contexts，dashboard 加 search bar
+
+---
+
 ## 後續 Phase（暫定）
 
-- **Phase 4**：外網部署（TLS / wss / JWT / IP allowlist）
-- **Phase 5**：Web dashboard + 訊息全文檢索
+- **Phase 4**：外網部署（TLS / wss / JWT / IP allowlist）— **暫時跳過，先做 Phase 5**
+- **Phase 5b**：Web dashboard write actions
+- **Phase 5c**：Full-text search

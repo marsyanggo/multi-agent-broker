@@ -3,14 +3,18 @@ from __future__ import annotations
 import asyncio
 import logging
 from contextlib import asynccontextmanager
+from pathlib import Path
 from typing import AsyncIterator
 
 from fastapi import FastAPI
+from fastapi.staticfiles import StaticFiles
 
 from mab.broker.config import settings
 from mab.broker.db import Database
-from mab.broker.routes import agents, channels, contexts, messages, tasks
+from mab.broker.routes import agents, channels, contexts, dashboard, messages, tasks
 from mab.broker.websocket import WebSocketHub, router as ws_router
+
+_STATIC_DIR = Path(__file__).parent / "static"
 
 log = logging.getLogger("mab.app")
 
@@ -56,7 +60,16 @@ app.include_router(messages.router)
 app.include_router(tasks.router)
 app.include_router(contexts.router)
 app.include_router(channels.router)
+app.include_router(dashboard.router)
 app.include_router(ws_router)
+
+# Read-only web dashboard. Bundled into the broker — same port, same auth
+# (Bearer token via Authorization header on /api/v1/dashboard/snapshot).
+app.mount(
+    "/dashboard",
+    StaticFiles(directory=str(_STATIC_DIR), html=True),
+    name="dashboard",
+)
 
 
 @app.get("/health")
