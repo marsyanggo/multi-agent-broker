@@ -23,3 +23,6 @@ build/
 
 # Claude Code per-user local settings (skills/ stays committed)
 .claude/settings.local.json
+
+# Backups written by deploy/setup-agent.sh before mutating local config
+*.mab-bak
