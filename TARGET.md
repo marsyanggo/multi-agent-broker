@@ -170,7 +170,7 @@ Phase 1 鎖定最小可運行核心：**agent + message + task**。先把兩台 
 - [ ] **D2.** Task `parent_task_id: str | None` — sub-task 結構
 - [ ] **CH1.** `Channel` 實體 + `post_to_channel` / `subscribe_channel` / `leave_channel`
 - [ ] **CH2.** Channel members broadcast 機制（多人 push）
-- [ ] **W1.** `tools/wait_for_task.py` — push-driven WS blocking helper（升級 polling 版 worker-mode 到 sub-second latency）
+- [x] **W1.** `wait_for_task` MCP tool — push-driven 取代 Monitor sleep；block 在 mab-agent 既有 WS queue 上，filter actionable tasks（pending OR assigned-to-me），sub-second latency。Skill 重寫 main loop 用 wait_for_task
 
 ---
 

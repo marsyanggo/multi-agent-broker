@@ -87,6 +87,35 @@ class BrokerClient:
         out, self._task_event_queue = self._task_event_queue, []
         return out
 
+    async def pop_one_task_event(
+        self,
+        timeout: float,
+        *,
+        actionable_for_id: str | None = None,
+    ) -> Task | None:
+        """Block until the next task event arrives in queue, or timeout.
+
+        Pops and returns one Task. If `actionable_for_id` is set, skips events
+        that aren't actionable for that agent — i.e. drops echoes of completed
+        / failed / deleted tasks and tasks assigned to someone else. A pending
+        task (any claimer) and an assigned-to-me task both count as actionable.
+        """
+        deadline = asyncio.get_event_loop().time() + timeout
+        while True:
+            while self._task_event_queue:
+                task = self._task_event_queue.pop(0)
+                if actionable_for_id is None:
+                    return task
+                if task.status == "pending":
+                    return task
+                if task.status == "assigned" and task.assigned_to == actionable_for_id:
+                    return task
+                # Not actionable — drop and check next.
+            remaining = deadline - asyncio.get_event_loop().time()
+            if remaining <= 0 or self._stop_evt.is_set():
+                return None
+            await asyncio.sleep(min(0.1, remaining))
+
     async def start(self) -> None:
         self._ws_task = asyncio.create_task(self._run_ws_loop())
         try:

@@ -4,7 +4,7 @@
 
 Spin up the broker on any reachable host, register one API key per agent, and Claude Code / Gemini CLI instances on separate boxes can list each other, exchange direct messages, and pass tasks back and forth. Tasks can require specific model capabilities (e.g. `tier:opus`, `family:claude`, `vision`) so high-stakes work only goes to agents that can handle it. Claude Code integration ships today via MCP stdio; REST + WebSocket are open for any other language or LLM framework to plug in.
 
-> **Status:** Phase 1 (core) + Phase 1.5 (deployment) + Phase 2.1 (capability routing) + Phase 2.2 (task delete + observability) + Phase 3a Roster (`match_agents` + freshness + capability self-update) complete. 81 tests, real-subprocess end-to-end demos, one-shot installer for Linux PCs, live cross-machine setup on Linux (broker) ↔ macOS (Claude Code via MCP), and live multi-agent filter-broadcast demo (claude-mac opus + worker-linux sonnet) — tasks with `required_all=[tier:opus]` reach claude-mac but never reach worker-linux, verified end-to-end. Task dependencies / channels / shared context / Python SDK adapters land in Phase 3 onwards.
+> **Status:** Phase 1 (core) + Phase 1.5 (deployment) + Phase 2.1 (capability routing) + Phase 2.2 (task delete + observability) + Phase 3a Roster (`match_agents` + freshness + capability self-update) complete. 93 tests, real-subprocess end-to-end demos, one-shot installer for Linux PCs, live cross-machine setup on Linux (broker) ↔ macOS (Claude Code via MCP), and live multi-agent filter-broadcast demo (claude-mac opus + worker-linux sonnet) — tasks with `required_all=[tier:opus]` reach claude-mac but never reach worker-linux, verified end-to-end. Task dependencies / channels / shared context / Python SDK adapters land in Phase 3 onwards.
 
 ---
 
@@ -90,12 +90,13 @@ mab-agent --broker-url ... --api-key ... \
   --capabilities vision,code-review     # extra tags merged with model derivation
 ```
 
-Restart Claude Code. You'll see 13 tools:
+Restart Claude Code. You'll see 14 tools:
 
 - **Roster** — `list_agents`, `match_agents`, `get_agent_info`
 - **Self** — `report_status`, `update_my_model`, `update_my_capabilities`
 - **Messaging** — `send_message`, `get_messages`
 - **Tasks** — `create_task`, `claim_task`, `update_task`, `delete_task`, `list_tasks`
+- **Worker** — `wait_for_task` (push-driven block on broker WS, used by /worker-mode)
 
 ### Try it out
 
@@ -115,13 +116,13 @@ The repo ships two Claude Code skills (under `.claude/skills/`) that turn any Cl
 | Command | Role | What it does |
 |---------|------|--------------|
 | `/lead-mode` | Planner / dispatcher | Scouts the roster, decomposes user goals into sub-tasks, picks best-fit agents by capability, monitors progress, synthesizes results |
-| `/worker-mode` | Autonomous executor | Polls `list_tasks(assigned_to=me)` every 30s, claims new work, executes per task description, reports `completed` or `failed`, loops |
+| `/worker-mode` | Autonomous executor | Blocks on `wait_for_task` (push-driven, sub-second latency); claims new work the instant the broker pushes it, executes per task description, reports `completed` or `failed`, loops |
 
 Typical multi-host setup:
 - **Lead host (e.g. your laptop)** — `/lead-mode` once, then talk to it like a project manager
 - **Worker hosts (e.g. a Linux box, a GPU machine)** — `/worker-mode` once, leave it running
 
-The skills are pure prompt + existing MCP tools — no daemon process, no new Python. The 30-second polling cadence is the only latency cost; for push-driven sub-second routing, layer in a `tools/wait_for_task.py` blocking-WS helper (planned).
+The skills are pure prompt + existing MCP tools — no daemon process, no new Python. Worker mode runs push-driven via the `wait_for_task` MCP tool (blocks on mab-agent's WS event queue, returns within ~100ms of broker push); no polling, sub-second routing latency.
 
 See the skill files themselves for the full behaviour spec.
 
@@ -309,7 +310,7 @@ CLI flags on `mab-agent` mirror the env vars; CLI takes precedence.
 
 ```bash
 uv run pytest
-# 81 tests, ~25s — includes real-subprocess end-to-end demo
+# 93 tests, ~25s — includes real-subprocess end-to-end demo
 ```
 
 Test layout:
@@ -322,7 +323,7 @@ Test layout:
 | `tests/test_routes.py` | REST routes against in-process FastAPI, including capability validation + task delete (creator / assignee / non-owner / 404) |
 | `tests/test_websocket.py` | Hub routing, backfill, agent/task events, capability filter broadcast |
 | `tests/test_broker_client.py` | `BrokerClient` against a live uvicorn broker (including app heartbeat) |
-| `tests/test_mcp_server.py` | MCP tool wiring (13 tools) + `_pending_messages` interceptor + `update_my_model` derivation |
+| `tests/test_mcp_server.py` | MCP tool wiring (14 tools) + `_pending_messages` interceptor + `update_my_model` derivation + `wait_for_task` push/timeout/filter |
 | `tests/test_e2e_demo.py` | `mab-broker serve` + 2× `mab-agent` via MCP stdio (4 demo scenarios) |
 
 ---

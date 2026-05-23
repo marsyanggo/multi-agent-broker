@@ -24,6 +24,7 @@ EXPECTED_TOOLS = {
     "update_task",
     "delete_task",
     "list_tasks",
+    "wait_for_task",
 }
 
 
@@ -130,6 +131,62 @@ async def test_update_my_model_with_extras(live_broker):
         assert "vision" in caps and "code-review" in caps
         assert "tier:opus" in caps
     finally:
+        await srv._client.stop()
+        srv._client = None
+
+
+async def test_wait_for_task_returns_pushed_task(live_broker):
+    url, (key_a, _), (key_b, agent_b) = live_broker
+    client_a = BrokerClient(broker_url=url, api_key=key_a)
+    srv._client = BrokerClient(broker_url=url, api_key=key_b)
+    try:
+        await client_a.start()
+        await srv._client.start()
+
+        # Alice creates a task assigned to bob — bob's queue should get it
+        # via WS push.
+        await client_a.create_task(title="bob's task", assigned_to=agent_b.id)
+
+        # wait_for_task should pick it up within a couple seconds.
+        result, _ = _unwrap(await srv.wait_for_task(timeout_seconds=3))
+        assert isinstance(result, dict)
+        assert result.get("title") == "bob's task"
+        assert result.get("assigned_to") == agent_b.id
+    finally:
+        await client_a.stop()
+        await srv._client.stop()
+        srv._client = None
+
+
+async def test_wait_for_task_returns_timeout_when_quiet(live_broker):
+    url, (key_a, _), _ = live_broker
+    srv._client = BrokerClient(broker_url=url, api_key=key_a)
+    try:
+        await srv._client.start()
+        result, _ = _unwrap(await srv.wait_for_task(timeout_seconds=1))
+        assert result == {"timeout": True}
+    finally:
+        await srv._client.stop()
+        srv._client = None
+
+
+async def test_wait_for_task_drops_non_actionable_echoes(live_broker):
+    url, (key_a, _), (key_b, agent_b) = live_broker
+    client_a = BrokerClient(broker_url=url, api_key=key_a)
+    srv._client = BrokerClient(broker_url=url, api_key=key_b)
+    try:
+        await client_a.start()
+        await srv._client.start()
+
+        # Alice creates a task assigned to herself — bob shouldn't see it as
+        # actionable (status="assigned" but not to bob).
+        await client_a.create_task(title="alice's task", assigned_to=client_a.agent.id)
+
+        # Give push time to arrive then time out.
+        result, _ = _unwrap(await srv.wait_for_task(timeout_seconds=1))
+        assert result == {"timeout": True}
+    finally:
+        await client_a.stop()
         await srv._client.stop()
         srv._client = None
 

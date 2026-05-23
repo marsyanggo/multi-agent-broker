@@ -65,24 +65,38 @@ For non-worker sessions (`/lead-mode`, normal coding), keep prompts on — lead 
    ```
 3. If you know your runtime model identity (Sonnet / Opus / Haiku / gpt-oss / llama / etc.) and it does NOT match the existing `model:*` tag in `my_caps`, call `mcp__mab__update_my_model("<model>")` first so the broker routes correctly.
 
-## Step 2 — Main poll loop
+## Step 2 — Catch-up scan (ONCE on entering worker mode)
 
-Repeat indefinitely until the user types STOP or you exit by unrecoverable error:
+Drain anything that landed before this session — push events you missed:
 
-1. Call `mcp__mab__list_tasks(assigned_to=my_id, status="assigned")` to fetch directly-assigned work.
-2. Also call `mcp__mab__list_tasks(status="pending")` and locally filter for tasks whose `required_all` / `required_any` match `my_caps`. (The broker push already filters these to your WS queue; this list call drains `_pending_task_events` and gives the durable view.)
-3. Merge both lists into `todo`.
-4. If `todo` is empty, **wait via the `Monitor` tool** — never standalone `Bash("sleep N")`:
-   - Claude Code blocks long foreground sleeps to prevent runaway polling loops.
-   - Call `Monitor` with a short description like `Wait 30 seconds before next polling cycle`. Monitor returns when the wait completes.
-   - After Monitor returns, goto 1.
-5. For each task in `todo`:
-   - If status is `pending`, call `mcp__mab__claim_task(task_id)` first. If that returns `403` (lack caps) / `409` (someone else got it), skip and continue to the next task.
-   - Call `mcp__mab__update_task(task_id, status="in_progress", note="picked up by worker-mode")`.
-   - **Execute the work described in `task.description`.** Use whatever tools (Bash, Read, Edit, Write, web search via mcp tools, etc.) the description calls for. Stay within the user's repo / sandbox unless the description explicitly broadens scope.
-   - On success: `mcp__mab__update_task(task_id, status="completed", result="<answer or summary>", note="done")`.
-   - On error (exception, missing dep, ambiguous / impossible description, capability mismatch you only noticed mid-work): `mcp__mab__update_task(task_id, status="failed", note="<short reason>")` and continue with the next task.
-6. After the batch, immediately loop back to step 1 (don't `Monitor`-wait — there may be more queued behind these).
+1. `mcp__mab__list_tasks(assigned_to=my_id, status="assigned")` → directly-assigned work
+2. `mcp__mab__list_tasks(status="pending")` → matching open-pool tasks (filter locally by `my_caps`)
+3. Merge into a catch-up list, process each via the "Process a task" subsection below.
+
+## Step 3 — Push-driven main loop
+
+Once catch-up is done, switch to push-driven. The broker pushes `task_event:created` (and claim / update / complete / delete) over the WebSocket as soon as they happen — mab-agent buffers them locally, and `mcp__mab__wait_for_task` blocks until something actionable arrives.
+
+Repeat indefinitely until the user types STOP or an unrecoverable broker error:
+
+1. Call `mcp__mab__wait_for_task(timeout_seconds=60)`:
+   - Returns `{"timeout": true}` → nothing arrived. Goto 1 (don't waste tokens speculating).
+   - Returns a task object → fall through.
+2. **Process the task** (see subsection below).
+3. Goto 1.
+
+**Do NOT** use `Monitor` / `Bash("sleep N")` as the wait primitive. `wait_for_task` is a single MCP tool call that does the right thing with sub-second latency. Falling back to Monitor sleep is a bug — file it.
+
+### Process a task
+
+For each task you decide to take:
+
+1. If `status == "pending"`, call `mcp__mab__claim_task(task_id)` first.
+   - `403` (lack caps) or `409` (someone else won) → skip, return to main loop.
+2. Call `mcp__mab__update_task(task_id, status="in_progress", note="picked up by worker-mode")`.
+3. **Execute the work described in `task.description`.** Use whatever tools (Bash, Read, Edit, Write, web search via mcp tools, etc.) the description calls for. Stay within the user's repo / sandbox unless the description explicitly broadens scope.
+4. On success: `mcp__mab__update_task(task_id, status="completed", result="<answer or summary>", note="done")`.
+5. On error (exception, missing dep, ambiguous / impossible description, capability mismatch you only noticed mid-work): `mcp__mab__update_task(task_id, status="failed", note="<short reason>")` and return to main loop.
 
 ## Sandbox + safety
 

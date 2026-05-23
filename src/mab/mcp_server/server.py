@@ -267,6 +267,35 @@ async def delete_task(task_id: str) -> str:
 
 @mcp.tool()
 @_with_pending
+async def wait_for_task(timeout_seconds: int = 60) -> str:
+    """Block until an actionable task event arrives via WS push, or timeout.
+
+    Push-driven primitive for worker-mode loops. Replaces polling with Monitor
+    sleeps — the broker pushes task_event:created (and other events) over the
+    WebSocket as soon as they happen; this tool blocks on the local event
+    queue and returns within ~100ms of arrival.
+
+    Returns:
+      - The next actionable task as JSON: a task with status="pending" (any
+        agent matching caps can claim) OR status="assigned" + assigned_to=me.
+      - {"timeout": true} if no actionable event in the window.
+
+    Non-actionable echoes (own claim/complete events, tasks assigned to other
+    agents) are silently dropped — workers don't see noise. Default timeout
+    60s — short enough to let the LLM loop re-evaluate state regularly,
+    long enough to amortise tool-call overhead."""
+    client = _client_or_raise()
+    my_id = client.agent.id if client.agent else None
+    task = await client.pop_one_task_event(
+        float(timeout_seconds), actionable_for_id=my_id
+    )
+    if task is None:
+        return _to_json({"timeout": True})
+    return _to_json(task.model_dump(mode="json"))
+
+
+@mcp.tool()
+@_with_pending
 async def list_tasks(
     status: str | None = None,
     assigned_to: str | None = None,
