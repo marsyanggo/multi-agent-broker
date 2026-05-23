@@ -47,11 +47,16 @@ class WebSocketHub:
             except Exception:
                 pass
 
-    async def disconnect(self, agent_id: str, ws: WebSocket) -> None:
+    async def disconnect(self, agent_id: str, ws: WebSocket) -> bool:
+        """Remove ws from registry. Returns True if this ws was the active one
+        (so callers know whether to flip status); False means a newer ws had
+        already taken over via supersede."""
         async with self._lock:
             current = self._conns.get(agent_id)
             if current is ws:
                 self._conns.pop(agent_id, None)
+                return True
+            return False
 
     async def _send(self, agent_id: str, env: Any) -> bool:
         ws = self._conns.get(agent_id)
@@ -183,8 +188,12 @@ async def ws_endpoint(websocket: WebSocket) -> None:
     except WebSocketDisconnect:
         pass
     finally:
-        await hub.disconnect(agent.id, websocket)
-        await db.set_agent_status(agent.id, "offline")
-        offline = await db.get_agent(agent.id)
-        if offline is not None:
-            await hub.emit_agent_event("offline", offline, exclude=agent.id)
+        was_active = await hub.disconnect(agent.id, websocket)
+        # Only flip status to offline if we were still the active connection.
+        # If a newer WS already superseded us, it has already set status=online
+        # and we must not clobber that.
+        if was_active:
+            await db.set_agent_status(agent.id, "offline")
+            offline = await db.get_agent(agent.id)
+            if offline is not None:
+                await hub.emit_agent_event("offline", offline, exclude=agent.id)

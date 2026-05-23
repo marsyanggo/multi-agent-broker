@@ -248,3 +248,40 @@ def test_ws_task_event_filtered_by_capability(setup):
             ev2 = ws_b.receive_json()
             assert ev2["type"] == "message"
             assert ev2["payload"]["message"]["content"] == "ping"
+
+
+def test_ws_supersede_keeps_status_online(setup):
+    """When a second WS opens for the same agent_id, the first one is closed
+    with code 4002. The old WS's disconnect handler must NOT flip status back
+    to offline — the newer WS has already set it to online and that must win."""
+    app, ((key_a, agent_a), _) = setup
+    with TestClient(app) as client:
+        with client.websocket_connect(
+            "/api/v1/ws", headers=_bearer(key_a)
+        ) as ws_old:
+            ws_old.receive_json()  # consume self-ready
+
+            # Verify status is online with the first WS active.
+            r = client.get("/api/v1/agents/me", headers=_bearer(key_a))
+            assert r.status_code == 200
+            assert r.json()["status"] == "online"
+
+            # Open a second WS for the same agent — broker supersedes the old.
+            with client.websocket_connect(
+                "/api/v1/ws", headers=_bearer(key_a)
+            ) as ws_new:
+                ws_new.receive_json()  # consume self-ready on new ws
+
+                # Drain the old ws's close frame so its endpoint coroutine
+                # finishes its finally block on the server side.
+                with pytest.raises(WebSocketDisconnect):
+                    while True:
+                        ws_old.receive_json()
+
+                # After the old WS's finally has run, status MUST still be
+                # "online" — the new WS owns the connection.
+                r = client.get("/api/v1/agents/me", headers=_bearer(key_a))
+                assert r.status_code == 200
+                assert r.json()["status"] == "online", (
+                    "supersede race: old WS clobbered status to offline"
+                )

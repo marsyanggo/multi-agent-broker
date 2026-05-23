@@ -197,6 +197,19 @@ class BrokerClient:
                         hb_task = None
             except asyncio.CancelledError:
                 raise
+            except websockets.exceptions.ConnectionClosed as e:
+                # 4002 = broker superseded us with another connection using the
+                # same agent_id. Reconnecting would just kick whoever took over
+                # and start a flap loop. Give up — caller / supervisor decides
+                # whether to respawn.
+                if e.rcvd is not None and e.rcvd.code == 4002:
+                    log.error(
+                        "ws superseded (4002) — another mab-agent with the same "
+                        "api-key took over. Stopping reconnect loop."
+                    )
+                    self._stop_evt.set()
+                    break
+                log.warning("ws closed: %s; reconnect in %.1fs", e, backoff)
             except Exception as e:
                 log.warning("ws error: %s; reconnect in %.1fs", e, backoff)
             finally:

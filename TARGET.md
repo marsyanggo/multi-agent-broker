@@ -290,6 +290,10 @@ Lead 派完 3 個 task 就 done — broker 串行 gate、自動 cap routing、�
 - [x] Recipe 4 — Shared context (pin spec / 上游 result auto-promote handoff)
 - [x] Recipe 5 — Channels (group broadcast for coordination noise / open queries)
 - [x] Recipe 6 — `/lead-mode` 端到端（natural language → fan-out + fan-in dino game demo, 4 tasks, ~5 min end-to-end, examples/dino.html artifact）
+- [x] 跑通 `/lead-mode` 端到端真實 demo（4-task 跨 vendor fan-in chain，B+C parallel ~25s，全鏈 ~5 min wall-clock）
+- [x] 產出 `examples/dino.html` 可玩 artifact（gpt-oss IIFE + claude-sonnet HTML shell splice via `// GAME_LOGIC_HERE` placeholder，221 lines single-file，browser-verified）
+- [x] README status header + roadmap 更新（Phase 3 fully complete 改寫，移除 "remaining" bullet）
+- [x] Commit `ca4b52a` 推上 GitHub main（cookbook Recipe 6 + dino.html + README/TARGET）
 
 ---
 
