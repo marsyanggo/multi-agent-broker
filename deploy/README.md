@@ -5,9 +5,12 @@ One-command install + one-command update for a single Linux PC. Runs the broker 
 | Action | Command |
 |--------|---------|
 | Install broker | `./deploy/install.sh` |
-| Wire Claude Code as agent | `./deploy/setup-agent.sh --broker-url ... --api-key ... [--model ...]` |
-| Update broker | `./deploy/update.sh` |
+| Wire Claude Code as MCP agent (interactive lead / dev) | `./deploy/setup-agent.sh --broker-url ... --api-key ... [--model ...]` |
+| Install autonomous worker daemon | `./deploy/setup-worker.sh --broker-url ... --api-key ... --adapter <a> --model <m>` |
+| Update broker (or worker host) | `./deploy/update.sh` |
 | Uninstall broker (keeps DB) | `./deploy/uninstall.sh` |
+
+**Three roles, three commands, one repo.** Broker is the message bus; agents are interactive Claude Code sessions via MCP (good for lead / dev work); workers are headless daemons that pull tasks and process them with a configurable LLM adapter (good for autonomous production execution — `claude-cli`, `anthropic`, `ollama`, `mock`).
 
 ## Prerequisites
 
@@ -71,6 +74,46 @@ That additionally writes `<repo>/.claude/settings.local.json` with `permissions.
 Then **restart Claude Code on that host** — MCP servers only load at session startup. After restart, `claude mcp list` should show `mab: ✓ Connected`, and the `/lead-mode` / `/worker-mode` slash commands become usable.
 
 `setup-agent.sh` is safe to re-run (idempotent) and never touches the broker DB — it only manipulates the local Claude config.
+
+## Install a worker daemon (headless, production)
+
+For hosts that should pull tasks autonomously without a Claude Code session, use `setup-worker.sh` instead of `setup-agent.sh`:
+
+```bash
+./deploy/setup-worker.sh \
+  --broker-url http://192.168.1.100:8420 \
+  --api-key   mab-ak-XXXXXXXXXXXXXXXX \
+  --adapter   ollama \
+  --model     gpt-oss:120b-cloud \
+  --ollama-base-url https://ollama.com \
+  --ollama-api-key  $OLLAMA_API_KEY
+```
+
+What it does:
+1. `uv sync` (installs `mab-worker` CLI on first run)
+2. Probes broker `/health` + validates key via `/agents/me`
+3. Writes systemd `--user` unit `mab-worker.service` to `~/.config/systemd/user/` with all env vars (including secrets) — `chmod 600`
+4. Enables linger (one sudo) so the service runs without an interactive login
+5. `systemctl --user enable --now mab-worker.service` (or restart if already installed)
+6. Polls `/agents/me` until status is `online` (10s window)
+
+`setup-worker.sh` is idempotent — re-run any time you change config or rotate the API key; the unit file is rewritten and the service restarted.
+
+**Multiple workers per host**: pass `--name <suffix>` to create `mab-worker-<suffix>.service`. E.g. `--name opus-cloud` and `--name sonnet-local` can coexist with their own units, env vars, and logs.
+
+**Adapters** (`--adapter`):
+- `anthropic` — POST to `api.anthropic.com/v1/messages`. Needs `--anthropic-api-key` (or `ANTHROPIC_API_KEY` env).
+- `ollama` — POST to Ollama's `/api/chat`. Local Ollama needs no auth; Ollama Cloud needs `--ollama-api-key`.
+- `claude-cli` — spawns `claude -p <prompt>` per task. Gives the worker access to Claude Code's full tool ecosystem (Bash / Edit / Read / web). Slower (cold start per task) but most capable.
+- `mock` — in-process echo for smoke tests / dry runs.
+
+Ops:
+```bash
+systemctl --user status mab-worker            # is it running?
+journalctl --user -u mab-worker -f            # tail logs
+systemctl --user restart mab-worker           # apply new config
+./deploy/update.sh && systemctl --user restart mab-worker   # update repo + restart
+```
 
 ## Day-to-day ops
 
