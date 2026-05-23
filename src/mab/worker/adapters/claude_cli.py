@@ -90,9 +90,12 @@ class ClaudeCLIAdapter(LLMAdapter):
             raise
 
         if proc.returncode != 0:
-            tail = stderr_bytes.decode(errors="replace")[-500:]
+            stderr_tail = stderr_bytes.decode(errors="replace")[-500:].strip()
+            stdout_tail = stdout_bytes.decode(errors="replace")[-500:].strip()
+            diag = stderr_tail or stdout_tail or "<no output>"
+            stream = "stderr" if stderr_tail else "stdout" if stdout_tail else "neither"
             raise LLMError(
-                f"`claude -p` exit {proc.returncode}: {tail.strip() or '<no stderr>'}"
+                f"`claude -p` exit {proc.returncode} ({stream}): {diag}"
             )
 
         result = stdout_bytes.decode(errors="replace").strip()
