@@ -12,6 +12,8 @@ from mab.shared.models import (
     Agent,
     AgentSnapshot,
     AgentStatus,
+    Channel,
+    ChannelMessage,
     Context,
     ContentType,
     Message,
@@ -21,6 +23,7 @@ from mab.shared.models import (
 )
 from mab.shared.protocol import (
     AgentEventEnvelope,
+    ChannelMessageEnvelope,
     MessageEnvelope,
     TaskEventEnvelope,
     envelope_adapter,
@@ -56,6 +59,7 @@ class BrokerClient:
         # (event_name, task) so consumers can filter by event type — workers
         # care about "created", leads about "completed" / "failed", etc.
         self._task_event_queue: list[tuple[str, Task]] = []
+        self._channel_message_queue: list[ChannelMessage] = []
         self._connected_evt = asyncio.Event()
         self._stop_evt = asyncio.Event()
         self._ws_task: asyncio.Task[None] | None = None
@@ -79,6 +83,10 @@ class BrokerClient:
         return len(self._task_event_queue)
 
     @property
+    def pending_channel_messages(self) -> int:
+        return len(self._channel_message_queue)
+
+    @property
     def is_connected(self) -> bool:
         return self._connected_evt.is_set()
 
@@ -89,6 +97,10 @@ class BrokerClient:
     def drain_task_events(self) -> list[tuple[str, Task]]:
         """Pop and return all queued (event_name, task) pairs."""
         out, self._task_event_queue = self._task_event_queue, []
+        return out
+
+    def drain_channel_messages(self) -> list[ChannelMessage]:
+        out, self._channel_message_queue = self._channel_message_queue, []
         return out
 
     async def pop_one_task_event(
@@ -225,6 +237,8 @@ class BrokerClient:
                 self._message_queue.append(env.payload.message)
             elif isinstance(env, TaskEventEnvelope):
                 self._task_event_queue.append((env.payload.event, env.payload.task))
+            elif isinstance(env, ChannelMessageEnvelope):
+                self._channel_message_queue.append(env.payload.message)
             elif isinstance(env, AgentEventEnvelope):
                 if env.to_agent is not None and env.payload.event == "online":
                     self.agent = env.payload.agent
@@ -412,6 +426,83 @@ class BrokerClient:
     async def delete_context(self, context_id: str) -> None:
         r = await self._http.delete(f"/api/v1/contexts/{context_id}")
         r.raise_for_status()
+
+    # --- Channels ---
+
+    async def create_channel(
+        self,
+        *,
+        name: str,
+        description: str = "",
+        auto_suffix: bool = False,
+    ) -> Channel:
+        body: dict[str, Any] = {"name": name, "description": description}
+        if auto_suffix:
+            body["auto_suffix"] = True
+        r = await self._http.post("/api/v1/channels", json=body)
+        r.raise_for_status()
+        return Channel.model_validate(r.json())
+
+    async def list_channels(
+        self, *, my_membership: bool = False
+    ) -> list[Channel]:
+        params: dict[str, Any] = {}
+        if my_membership:
+            params["my_membership"] = "true"
+        r = await self._http.get("/api/v1/channels", params=params)
+        r.raise_for_status()
+        return [Channel.model_validate(c) for c in r.json()]
+
+    async def get_channel(self, channel_id: str) -> dict | None:
+        """Returns {'channel': Channel, 'members': [agent_id, ...]} or None."""
+        r = await self._http.get(f"/api/v1/channels/{channel_id}")
+        if r.status_code == 404:
+            return None
+        r.raise_for_status()
+        return r.json()
+
+    async def delete_channel(self, channel_id: str) -> None:
+        r = await self._http.delete(f"/api/v1/channels/{channel_id}")
+        r.raise_for_status()
+
+    async def join_channel(self, channel_id: str) -> dict:
+        r = await self._http.post(f"/api/v1/channels/{channel_id}/join")
+        r.raise_for_status()
+        return r.json()
+
+    async def leave_channel(self, channel_id: str) -> None:
+        r = await self._http.post(f"/api/v1/channels/{channel_id}/leave")
+        r.raise_for_status()
+
+    async def post_to_channel(
+        self,
+        channel_id: str,
+        *,
+        content: str,
+        content_type: ContentType = "text/plain",
+    ) -> ChannelMessage:
+        body = {"content": content, "content_type": content_type}
+        r = await self._http.post(
+            f"/api/v1/channels/{channel_id}/messages", json=body
+        )
+        r.raise_for_status()
+        return ChannelMessage.model_validate(r.json())
+
+    async def get_channel_messages(
+        self,
+        channel_id: str,
+        *,
+        since: str | None = None,
+        limit: int = 100,
+    ) -> list[ChannelMessage]:
+        params: dict[str, Any] = {"limit": limit}
+        if since:
+            params["since"] = since
+        r = await self._http.get(
+            f"/api/v1/channels/{channel_id}/messages", params=params
+        )
+        r.raise_for_status()
+        return [ChannelMessage.model_validate(m) for m in r.json()]
 
     async def update_task(
         self,

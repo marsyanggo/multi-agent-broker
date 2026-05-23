@@ -11,7 +11,7 @@ from fastapi import FastAPI
 
 from mab.broker.db import Database
 from mab.broker.keygen import gen_key
-from mab.broker.routes import agents, contexts, messages, tasks
+from mab.broker.routes import agents, channels, contexts, messages, tasks
 from mab.broker.websocket import WebSocketHub, router as ws_router
 
 
@@ -47,6 +47,7 @@ async def live_broker(tmp_path: Path):
     fa.include_router(messages.router)
     fa.include_router(tasks.router)
     fa.include_router(contexts.router)
+    fa.include_router(channels.router)
     fa.include_router(ws_router)
 
     port = _free_port()

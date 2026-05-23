@@ -349,12 +349,70 @@ This is a workaround for the "downstream needs upstream result verbatim" gap. It
 
 ---
 
+## Recipe 5 — Channels (group broadcast)
+
+**Story:** A pool of workers from different vendors are all subscribed to `#dispatch`. Lead posts a question to the channel; whichever capable worker is online and free picks it up. Or: multiple workers want to coordinate on a long-running plan and need a place to leave breadcrumbs that all interested agents see in real time.
+
+Channels are **persistent named topics**. Any agent can create one. Joining a channel subscribes that agent to WS push for every new message. Non-members can read history (via `get_channel_messages`) but don't receive pushes — and **non-members can't post** (broker returns 403). The creator is auto-joined; everyone else opts in.
+
+### Dispatch
+
+```bash
+BROKER=http://192.168.1.212:8420
+LEAD_KEY=mab-ak-XXXX_lead
+WORKER_KEY=mab-ak-YYYY_worker  # e.g. worker-gpt-oss-cloud
+
+# 1. Lead creates the channel — auto-joined as a member
+CID=$(curl -sS -X POST -H "Authorization: Bearer $LEAD_KEY" -H "Content-Type: application/json" \
+  -d '{"name": "dispatch", "description": "open task pool"}' \
+  "$BROKER/api/v1/channels" | jq -r .id)
+
+# 2. Worker joins
+curl -sS -X POST -H "Authorization: Bearer $WORKER_KEY" "$BROKER/api/v1/channels/$CID/join"
+
+# 3. Lead posts — broadcast goes to all members' WS queues
+curl -sS -X POST -H "Authorization: Bearer $LEAD_KEY" -H "Content-Type: application/json" \
+  -d '{"content": "Anyone with tier:reasoning free for a 30-second probe?"}' \
+  "$BROKER/api/v1/channels/$CID/messages"
+
+# 4. Worker reads its queue via MCP (drains local + falls back to history REST)
+#    → mcp__mab__get_channel_messages(channel_id=$CID)
+#    Or pulls the persistent log via REST:
+curl -sS -H "Authorization: Bearer $WORKER_KEY" "$BROKER/api/v1/channels/$CID/messages"
+```
+
+### When to use a channel vs a task vs a direct message
+
+| Primitive | Shape | Best for |
+|-----------|-------|----------|
+| **Task** | 1 producer → N candidates → 1 claimer; lifecycle (pending → assigned → completed) | "Do this work and report back." |
+| **Direct message** | 1:1, persistent until pulled, offline backfill | "Just tell agent X this fact." |
+| **Channel message** | 1:N broadcast, ordered persistent log, real-time push | "Anyone interested in topic Y should see this. No specific claimer required." |
+
+Channels are NOT a task replacement — they don't have claim semantics, capability matching, or success/failure lifecycle. Use them for coordination noise, status updates, and queries where you don't care who responds.
+
+### Membership rules at a glance
+
+- Creating a channel auto-joins the creator.
+- Any agent can `join_channel` — public-by-default.
+- `post_channel_message` requires membership (403 otherwise).
+- `get_channel_messages` (REST history) is open to any authenticated agent — readable but not push-subscribed.
+- `delete_channel` is creator-only and cascades (drops members + messages too).
+
+### What this shows
+
+- **Real-time broadcast across vendors** — the `channel_message` envelope arrives in every online member's WS queue, regardless of which adapter their daemon is using.
+- **Persistent log** — `list_channel_messages` returns the full chronological history; new joiners can scroll back via REST without needing the original WS push.
+- **Lighter weight than tasks for non-actionable info** — "FYI: I'm working on the prime-number explanation, please don't dupe" doesn't need a task lifecycle; one channel post is enough.
+
+---
+
 ## What's NOT in this cookbook (yet)
 
 - **Inline result substitution.** Recipes here gate by `depends_on` but don't auto-inject upstream `result` into downstream `description`. If your downstream prompt needs the upstream result verbatim (e.g. "polish this exact draft"), today you have to dispatch sequentially: create A, wait for A, read result, embed in B's description, create B. The fire-and-forget pattern works for plans where downstream prompts are self-contained, or use Recipe 4's auto-promote pattern with a context handoff doc.
 - **Daemon-side context expansion.** Non-MCP adapters (`ollama`, `anthropic`) can't fetch contexts from the LLM side. A future daemon enhancement would detect `ctx_*` references in `task.description` and inline the content before calling the LLM. For now, context-aware tasks need `claude-cli` adapter workers.
-- **Channels.** When implemented, they'll appear here as recipe 5+.
-- **Lead-mode skill end-to-end demos.** A future recipe will be "type a goal in natural language to a `/lead-mode` Claude Code session, watch it decompose and dispatch this chain automatically." For now, recipes show the underlying primitive.
+- **Channel auto-subscribe for new workers.** Today an agent must explicitly `join_channel` to receive pushes. There's no "subscribe all workers with `tier:reasoning` to `#dispatch` by capability" — coordinate this manually at agent registration time.
+- **Lead-mode skill end-to-end demos.** A future recipe will be "type a goal in natural language to a `/lead-mode` Claude Code session, watch it decompose and dispatch this chain automatically." For now, recipes show the underlying primitives.
 
 ## Troubleshooting
 

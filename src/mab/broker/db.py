@@ -11,6 +11,8 @@ from mab.shared.capabilities import matches_capabilities
 from mab.shared.models import (
     Agent,
     AgentStatus,
+    Channel,
+    ChannelMessage,
     Context,
     ContentType,
     Message,
@@ -87,6 +89,37 @@ CREATE TABLE IF NOT EXISTS contexts (
 CREATE INDEX IF NOT EXISTS idx_contexts_name ON contexts(name);
 CREATE INDEX IF NOT EXISTS idx_contexts_created_by ON contexts(created_by);
 CREATE INDEX IF NOT EXISTS idx_contexts_task_id ON contexts(task_id);
+
+CREATE TABLE IF NOT EXISTS channels (
+    id TEXT PRIMARY KEY,
+    name TEXT NOT NULL UNIQUE,
+    description TEXT NOT NULL DEFAULT '',
+    created_by TEXT NOT NULL,
+    created_at TEXT NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_channels_name ON channels(name);
+
+CREATE TABLE IF NOT EXISTS channel_members (
+    channel_id TEXT NOT NULL,
+    agent_id TEXT NOT NULL,
+    joined_at TEXT NOT NULL,
+    PRIMARY KEY (channel_id, agent_id)
+);
+
+CREATE INDEX IF NOT EXISTS idx_channel_members_agent ON channel_members(agent_id);
+
+CREATE TABLE IF NOT EXISTS channel_messages (
+    id TEXT PRIMARY KEY,
+    channel_id TEXT NOT NULL,
+    from_agent TEXT NOT NULL,
+    content TEXT NOT NULL,
+    content_type TEXT NOT NULL DEFAULT 'text/plain',
+    created_at TEXT NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_channel_messages_channel
+    ON channel_messages(channel_id, created_at);
 """
 
 
@@ -122,6 +155,27 @@ def _row_to_message(row: aiosqlite.Row) -> Message:
         created_at=_parse_dt(row["created_at"]),
         delivered=bool(row["delivered"]),
         delivered_at=_parse_dt(row["delivered_at"]),
+    )
+
+
+def _row_to_channel(row: aiosqlite.Row) -> Channel:
+    return Channel(
+        id=row["id"],
+        name=row["name"],
+        description=row["description"],
+        created_by=row["created_by"],
+        created_at=_parse_dt(row["created_at"]),
+    )
+
+
+def _row_to_channel_message(row: aiosqlite.Row) -> ChannelMessage:
+    return ChannelMessage(
+        id=row["id"],
+        channel_id=row["channel_id"],
+        from_agent=row["from_agent"],
+        content=row["content"],
+        content_type=row["content_type"],
+        created_at=_parse_dt(row["created_at"]),
     )
 
 
@@ -693,3 +747,178 @@ class Database:
         await cur.close()
         await self.conn.commit()
         return deleted
+
+    # --- Channels ---
+
+    async def create_channel(
+        self,
+        *,
+        name: str,
+        description: str = "",
+        created_by: str,
+    ) -> Channel:
+        """Insert a new channel and auto-add the creator as a member. Raises
+        IntegrityError if `name` collides (caller should catch + translate)."""
+        channel_id = short_uuid()
+        now = utc_now()
+        await self.conn.execute(
+            """
+            INSERT INTO channels (id, name, description, created_by, created_at)
+            VALUES (?, ?, ?, ?, ?)
+            """,
+            (channel_id, name, description, created_by, _iso(now)),
+        )
+        # Auto-join creator
+        await self.conn.execute(
+            "INSERT INTO channel_members (channel_id, agent_id, joined_at) VALUES (?, ?, ?)",
+            (channel_id, created_by, _iso(now)),
+        )
+        await self.conn.commit()
+        return Channel(
+            id=channel_id,
+            name=name,
+            description=description,
+            created_by=created_by,
+            created_at=now,
+        )
+
+    async def get_channel(self, channel_id: str) -> Channel | None:
+        async with self.conn.execute(
+            "SELECT * FROM channels WHERE id = ?", (channel_id,)
+        ) as cur:
+            row = await cur.fetchone()
+        return _row_to_channel(row) if row else None
+
+    async def get_channel_by_name(self, name: str) -> Channel | None:
+        async with self.conn.execute(
+            "SELECT * FROM channels WHERE name = ?", (name,)
+        ) as cur:
+            row = await cur.fetchone()
+        return _row_to_channel(row) if row else None
+
+    async def list_channels(
+        self,
+        *,
+        member_id: str | None = None,
+    ) -> list[Channel]:
+        """List all channels, or only those `member_id` is subscribed to."""
+        if member_id is None:
+            async with self.conn.execute(
+                "SELECT * FROM channels ORDER BY created_at ASC"
+            ) as cur:
+                rows = await cur.fetchall()
+        else:
+            async with self.conn.execute(
+                """
+                SELECT c.* FROM channels c
+                JOIN channel_members m ON c.id = m.channel_id
+                WHERE m.agent_id = ?
+                ORDER BY c.created_at ASC
+                """,
+                (member_id,),
+            ) as cur:
+                rows = await cur.fetchall()
+        return [_row_to_channel(r) for r in rows]
+
+    async def delete_channel(self, channel_id: str) -> bool:
+        # Cascade members + messages manually (no FK in SQLite default)
+        await self.conn.execute(
+            "DELETE FROM channel_messages WHERE channel_id = ?", (channel_id,)
+        )
+        await self.conn.execute(
+            "DELETE FROM channel_members WHERE channel_id = ?", (channel_id,)
+        )
+        cur = await self.conn.execute(
+            "DELETE FROM channels WHERE id = ?", (channel_id,)
+        )
+        deleted = cur.rowcount > 0
+        await cur.close()
+        await self.conn.commit()
+        return deleted
+
+    async def join_channel(self, channel_id: str, agent_id: str) -> bool:
+        """Add agent as member. Returns False if already a member (idempotent)."""
+        try:
+            await self.conn.execute(
+                "INSERT INTO channel_members (channel_id, agent_id, joined_at) VALUES (?, ?, ?)",
+                (channel_id, agent_id, _iso(utc_now())),
+            )
+            await self.conn.commit()
+            return True
+        except aiosqlite.IntegrityError:
+            return False
+
+    async def leave_channel(self, channel_id: str, agent_id: str) -> bool:
+        cur = await self.conn.execute(
+            "DELETE FROM channel_members WHERE channel_id = ? AND agent_id = ?",
+            (channel_id, agent_id),
+        )
+        removed = cur.rowcount > 0
+        await cur.close()
+        await self.conn.commit()
+        return removed
+
+    async def list_channel_members(self, channel_id: str) -> list[str]:
+        """Return list of agent_id strings subscribed to the channel."""
+        async with self.conn.execute(
+            "SELECT agent_id FROM channel_members WHERE channel_id = ? ORDER BY joined_at ASC",
+            (channel_id,),
+        ) as cur:
+            rows = await cur.fetchall()
+        return [r["agent_id"] for r in rows]
+
+    async def is_channel_member(self, channel_id: str, agent_id: str) -> bool:
+        async with self.conn.execute(
+            "SELECT 1 FROM channel_members WHERE channel_id = ? AND agent_id = ?",
+            (channel_id, agent_id),
+        ) as cur:
+            return await cur.fetchone() is not None
+
+    async def post_channel_message(
+        self,
+        *,
+        channel_id: str,
+        from_agent: str,
+        content: str,
+        content_type: ContentType = "text/plain",
+    ) -> ChannelMessage:
+        msg_id = short_uuid()
+        now = utc_now()
+        await self.conn.execute(
+            """
+            INSERT INTO channel_messages
+                (id, channel_id, from_agent, content, content_type, created_at)
+            VALUES (?, ?, ?, ?, ?, ?)
+            """,
+            (msg_id, channel_id, from_agent, content, content_type, _iso(now)),
+        )
+        await self.conn.commit()
+        return ChannelMessage(
+            id=msg_id,
+            channel_id=channel_id,
+            from_agent=from_agent,
+            content=content,
+            content_type=content_type,
+            created_at=now,
+        )
+
+    async def list_channel_messages(
+        self,
+        channel_id: str,
+        *,
+        since: datetime | None = None,
+        limit: int = 100,
+    ) -> list[ChannelMessage]:
+        clauses = ["channel_id = ?"]
+        vals: list[Any] = [channel_id]
+        if since is not None:
+            clauses.append("created_at > ?")
+            vals.append(_iso(since))
+        vals.append(limit)
+        sql = (
+            f"SELECT * FROM channel_messages WHERE {' AND '.join(clauses)} "
+            "ORDER BY created_at ASC LIMIT ?"
+        )
+        async with self.conn.execute(sql, vals) as cur:
+            rows = await cur.fetchall()
+        return [_row_to_channel_message(r) for r in rows]

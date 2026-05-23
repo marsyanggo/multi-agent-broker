@@ -30,6 +30,13 @@ EXPECTED_TOOLS = {
     "get_context",
     "update_context",
     "delete_context",
+    "create_channel",
+    "list_channels",
+    "get_channel_info",
+    "join_channel",
+    "leave_channel",
+    "post_to_channel",
+    "get_channel_messages",
 }
 
 
@@ -62,7 +69,11 @@ async def test_send_message_tool_against_live_broker(live_broker):
         )
         assert result["content"] == "hello via tool"
         assert result["to_agent"] == agent_b.id
-        assert meta == {"_pending_messages": 0, "_pending_task_events": 0}
+        assert meta == {
+            "_pending_messages": 0,
+            "_pending_task_events": 0,
+            "_pending_channel_messages": 0,
+        }
     finally:
         await srv._client.stop()
         srv._client = None
@@ -192,6 +203,53 @@ async def test_wait_for_task_drops_non_actionable_echoes(live_broker):
         assert result == {"timeout": True}
     finally:
         await client_a.stop()
+        await srv._client.stop()
+        srv._client = None
+
+
+async def test_channel_full_lifecycle_via_mcp(live_broker):
+    """create → join (via second agent's BrokerClient) → post → other
+    member receives push + can read history."""
+    url, (key_a, agent_a), (key_b, agent_b) = live_broker
+
+    # Alice runs as MCP client; Bob as a vanilla BrokerClient for the
+    # other side of the channel.
+    bob = BrokerClient(broker_url=url, api_key=key_b)
+    srv._client = BrokerClient(broker_url=url, api_key=key_a)
+    try:
+        await bob.start()
+        await srv._client.start()
+
+        # Alice creates channel
+        result, _ = _unwrap(
+            await srv.create_channel(name="team-sync", description="daily")
+        )
+        cid = result["id"]
+
+        # Bob joins (via BrokerClient REST, not MCP)
+        await bob.join_channel(cid)
+
+        # Alice posts via MCP
+        result, _ = _unwrap(
+            await srv.post_to_channel(
+                cid, content="standup at 10am sharp"
+            )
+        )
+        assert result["content"] == "standup at 10am sharp"
+        assert result["from_agent"] == agent_a.id
+
+        # Bob's WS queue should receive the broadcast
+        await asyncio.sleep(0.2)
+        msgs = bob.drain_channel_messages()
+        assert len(msgs) == 1
+        assert msgs[0].content == "standup at 10am sharp"
+
+        # Alice reads channel history via MCP
+        result, _ = _unwrap(await srv.get_channel_messages(cid))
+        assert len(result) == 1
+        assert result[0]["content"] == "standup at 10am sharp"
+    finally:
+        await bob.stop()
         await srv._client.stop()
         srv._client = None
 

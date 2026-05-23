@@ -9,11 +9,13 @@ from fastapi import APIRouter, Request, WebSocket, WebSocketDisconnect
 
 from mab.broker.auth import hash_api_key
 from mab.broker.db import Database
-from mab.shared.models import Agent, Message, Task, short_uuid
+from mab.shared.models import Agent, ChannelMessage, Message, Task, short_uuid
 from mab.shared.protocol import (
     AgentEventEnvelope,
     AgentEventName,
     AgentEventPayload,
+    ChannelMessageEnvelope,
+    ChannelMessagePayload,
     MessageEnvelope,
     MessagePayload,
     TaskEventEnvelope,
@@ -62,6 +64,19 @@ class WebSocketHub:
             log.warning("ws send failed for %s; dropping connection", agent_id)
             self._conns.pop(agent_id, None)
             return False
+
+    async def emit_channel_message(
+        self, message: ChannelMessage, members: Iterable[str]
+    ) -> None:
+        """Push a channel message to every online member of the channel
+        (including the sender — sender's BrokerClient may filter own messages
+        if it cares; broker doesn't distinguish)."""
+        env = ChannelMessageEnvelope(
+            id=short_uuid(),
+            payload=ChannelMessagePayload(message=message),
+        )
+        for agent_id in members:
+            await self._send(agent_id, env)
 
     async def try_deliver_message(self, message: Message) -> bool:
         env = MessageEnvelope(

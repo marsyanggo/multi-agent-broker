@@ -288,7 +288,7 @@ Lead 派完 3 個 task 就 done — broker 串行 gate、自動 cap routing、�
 - [x] Recipe 3 — Failure cascade (upstream fail → downstream auto-fail with cascade note)
 - [x] Troubleshooting table（schema migration trap、status flapping 等）
 - [x] Recipe 4 — Shared context (pin spec / 上游 result auto-promote handoff)
-- [ ] Recipe 5+ — channels (等 feature 寫完)
+- [x] Recipe 5 — Channels (group broadcast for coordination noise / open queries)
 - [ ] Recipe N — `/lead-mode` skill 端到端（lead 自己用自然語言拆 plan 自動 dispatch）
 
 ---
@@ -319,8 +319,44 @@ Lead 派完 3 個 task 就 done — broker 串行 gate、自動 cap routing、�
 
 ---
 
+## Phase 3 — Channels (group broadcast)
+
+`docs/cookbook.md` Recipe 5 文件。名稱唯一的 group-broadcast 頻道；member 才能 post，但 reading history 對所有 authenticated agent 開放。WS push 即時送給所有 online members。
+
+### 決策（已鎖定）
+
+| 項目 | 決定 |
+|------|------|
+| Name 唯一性 | 唯一。collision 預設 409，`auto_suffix=true` 自動加 `-2 / -3 / ...`（跟 gen-key 對齊） |
+| 自動加入 creator | 是 — `create_channel` 自動把 creator 寫進 `channel_members` |
+| Posting 權限 | 限 member（403 if not joined） |
+| Reading history 權限 | 任何 authenticated agent 可讀（REST `GET /channels/{id}/messages`）|
+| WS push | 發給所有 online members 包含 sender 自己（一致性、簡單）|
+| Delete | creator 才能刪，cascade 清 members + messages |
+| 跟 direct Message 關係 | 完全分開 table — channel_messages 帶 channel_id、沒 to_agent |
+
+### Sub-tasks (CH)
+
+- [x] **CH1.** `Channel` + `ChannelMessage` pydantic models + 3 tables (`channels`, `channel_members`, `channel_messages`) + db CRUD（create / get / list / delete / join / leave / list_members / is_member / post / list_messages）
+- [x] **CH2.** REST routes `POST/GET/DELETE /api/v1/channels`、`POST /channels/{id}/join`、`POST /channels/{id}/leave`、`POST/GET /channels/{id}/messages` + `auto_suffix` 衝突處理
+- [x] **CH3.** WS broadcast：新 `ChannelMessageEnvelope` 加進 protocol discriminator + `hub.emit_channel_message(msg, members)`
+- [x] **CH4.** 11 個 REST + WS test (create / auto-join creator / duplicate-409 / auto-suffix / join+leave / my_membership filter / post-requires-member / post+list history / delete creator-only / WS broadcast to members / WS skip non-members)
+- [x] **CH5.** MCP tools (`create_channel` / `list_channels` / `get_channel_info` / `join_channel` / `leave_channel` / `post_to_channel` / `get_channel_messages`) + BrokerClient methods + `_channel_message_queue` 加進 WS receive loop
+- [x] **CH6.** `_with_pending` wrapper 加 `_pending_channel_messages` 計數 + 1 個 MCP lifecycle 整合測試（create → join → post → other member receives push → reads history）
+- [x] **CH7.** Cookbook Recipe 5 + TARGET / README 收尾
+
+### Production-grade primitive 對照
+
+| Primitive | Shape | 用法 |
+|-----------|-------|------|
+| **Task** | 1 producer → N candidates → 1 claimer；lifecycle pending → assigned → completed | 「做這件事然後回報」 |
+| **Direct message** | 1:1，持久 till pulled，offline backfill | 「告訴 agent X 這件事」 |
+| **Channel message** | 1:N broadcast，ordered persistent log，real-time push | 「對 topic Y 有興趣的人都該看到。沒固定 claimer」 |
+| **Context** | persistent named doc，任何 agent 可讀 | 「pin 一份 reference 給所有 task 用」 |
+
+---
+
 ## 後續 Phase（暫定）
 
-- **Phase 3**（剩餘）：channels
 - **Phase 4**：外網部署（TLS / wss / JWT / IP allowlist）
 - **Phase 5**：Web dashboard + 訊息全文檢索

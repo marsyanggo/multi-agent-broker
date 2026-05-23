@@ -50,6 +50,9 @@ def _attach_pending(text_result: str) -> str:
             "result": inner,
             "_pending_messages": client.pending_messages if client else 0,
             "_pending_task_events": client.pending_task_events if client else 0,
+            "_pending_channel_messages": (
+                client.pending_channel_messages if client else 0
+            ),
         }
     )
 
@@ -273,6 +276,100 @@ async def delete_task(task_id: str) -> str:
     except Exception as e:
         return _to_json({"error": str(e), "task_id": task_id})
     return _to_json({"deleted": task_id})
+
+
+@mcp.tool()
+@_with_pending
+async def create_channel(
+    name: str,
+    description: str = "",
+    auto_suffix: bool = False,
+) -> str:
+    """Create a named group-broadcast channel. The creator is auto-joined.
+    Channel names are unique; pass auto_suffix=true to append -2, -3, ...
+    instead of failing on collision. Returns the new channel (incl. id)."""
+    try:
+        ch = await _client_or_raise().create_channel(
+            name=name, description=description, auto_suffix=auto_suffix
+        )
+    except Exception as e:
+        return _to_json({"error": str(e), "name": name})
+    return _to_json(ch.model_dump(mode="json"))
+
+
+@mcp.tool()
+@_with_pending
+async def list_channels(my_membership: bool = False) -> str:
+    """List channels. Pass my_membership=true to filter to only channels
+    I've joined."""
+    chs = await _client_or_raise().list_channels(my_membership=my_membership)
+    return _to_json([c.model_dump(mode="json") for c in chs])
+
+
+@mcp.tool()
+@_with_pending
+async def get_channel_info(channel_id: str) -> str:
+    """Read channel details + current member list."""
+    detail = await _client_or_raise().get_channel(channel_id)
+    if detail is None:
+        return _to_json({"error": "not found", "channel_id": channel_id})
+    return _to_json(detail)
+
+
+@mcp.tool()
+@_with_pending
+async def join_channel(channel_id: str) -> str:
+    """Add me as a member of the channel. Idempotent."""
+    try:
+        detail = await _client_or_raise().join_channel(channel_id)
+    except Exception as e:
+        return _to_json({"error": str(e), "channel_id": channel_id})
+    return _to_json(detail)
+
+
+@mcp.tool()
+@_with_pending
+async def leave_channel(channel_id: str) -> str:
+    """Remove me from the channel's member list."""
+    try:
+        await _client_or_raise().leave_channel(channel_id)
+    except Exception as e:
+        return _to_json({"error": str(e), "channel_id": channel_id})
+    return _to_json({"left": channel_id})
+
+
+@mcp.tool()
+@_with_pending
+async def post_to_channel(
+    channel_id: str,
+    content: str,
+    content_type: str = "text/plain",
+) -> str:
+    """Post a message to a channel. Must be a member first (broker returns
+    403 otherwise). Broker broadcasts via WS to all online members."""
+    try:
+        msg = await _client_or_raise().post_to_channel(
+            channel_id, content=content, content_type=content_type  # type: ignore[arg-type]
+        )
+    except Exception as e:
+        return _to_json({"error": str(e), "channel_id": channel_id})
+    return _to_json(msg.model_dump(mode="json"))
+
+
+@mcp.tool()
+@_with_pending
+async def get_channel_messages(
+    channel_id: str,
+    since: str | None = None,
+    limit: int = 100,
+) -> str:
+    """Read channel history. Pulls + drains the local WS queue first, then
+    falls back to broker REST for older messages or when reconnecting after
+    offline backfill. `since` is an ISO-8601 timestamp."""
+    client = _client_or_raise()
+    client.drain_channel_messages()
+    msgs = await client.get_channel_messages(channel_id, since=since, limit=limit)
+    return _to_json([m.model_dump(mode="json") for m in msgs])
 
 
 @mcp.tool()

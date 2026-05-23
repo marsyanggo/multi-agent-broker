@@ -55,6 +55,29 @@ class Message(BaseModel):
     delivered_at: datetime | None = None
 
 
+class Channel(BaseModel):
+    """A named group-broadcast topic. Agents join and posts go to all
+    subscribed members via WS push (plus persistent DB history)."""
+
+    id: str
+    name: str
+    description: str = ""
+    created_by: str
+    created_at: datetime
+
+
+class ChannelMessage(BaseModel):
+    """A message posted to a channel. Distinct from direct Message (1:1):
+    these have channel_id and broadcast to all subscribers, no to_agent."""
+
+    id: str
+    channel_id: str
+    from_agent: str
+    content: str
+    content_type: ContentType = "text/plain"
+    created_at: datetime
+
+
 class Context(BaseModel):
     """A persistent named document any agent can read.
 

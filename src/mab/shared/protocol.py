@@ -5,7 +5,7 @@ from typing import Annotated, Literal, Union
 
 from pydantic import BaseModel, Field, TypeAdapter
 
-from mab.shared.models import Agent, Message, Task, utc_now
+from mab.shared.models import Agent, ChannelMessage, Message, Task, utc_now
 
 TaskEventName = Literal[
     "created", "claimed", "updated", "completed", "failed", "deleted"
@@ -15,6 +15,10 @@ AgentEventName = Literal["online", "offline"]
 
 class MessagePayload(BaseModel):
     message: Message
+
+
+class ChannelMessagePayload(BaseModel):
+    message: ChannelMessage
 
 
 class TaskEventPayload(BaseModel):
@@ -43,6 +47,11 @@ class MessageEnvelope(_EnvelopeBase):
     payload: MessagePayload
 
 
+class ChannelMessageEnvelope(_EnvelopeBase):
+    type: Literal["channel_message"] = "channel_message"
+    payload: ChannelMessagePayload
+
+
 class TaskEventEnvelope(_EnvelopeBase):
     type: Literal["task_event"] = "task_event"
     payload: TaskEventPayload
@@ -60,6 +69,7 @@ class AckEnvelope(_EnvelopeBase):
 
 AnyEnvelope = Union[
     MessageEnvelope,
+    ChannelMessageEnvelope,
     TaskEventEnvelope,
     AgentEventEnvelope,
     AckEnvelope,
