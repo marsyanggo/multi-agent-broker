@@ -52,7 +52,9 @@ class BrokerClient:
         )
         self._ws: Any = None
         self._message_queue: list[Message] = []
-        self._task_event_queue: list[Task] = []
+        # (event_name, task) so consumers can filter by event type — workers
+        # care about "created", leads about "completed" / "failed", etc.
+        self._task_event_queue: list[tuple[str, Task]] = []
         self._connected_evt = asyncio.Event()
         self._stop_evt = asyncio.Event()
         self._ws_task: asyncio.Task[None] | None = None
@@ -83,7 +85,8 @@ class BrokerClient:
         out, self._message_queue = self._message_queue, []
         return out
 
-    def drain_task_events(self) -> list[Task]:
+    def drain_task_events(self) -> list[tuple[str, Task]]:
+        """Pop and return all queued (event_name, task) pairs."""
         out, self._task_event_queue = self._task_event_queue, []
         return out
 
@@ -92,18 +95,31 @@ class BrokerClient:
         timeout: float,
         *,
         actionable_for_id: str | None = None,
+        only_events: set[str] | None = None,
     ) -> Task | None:
-        """Block until the next task event arrives in queue, or timeout.
+        """Block until the next interesting task event arrives, or timeout.
 
-        Pops and returns one Task. If `actionable_for_id` is set, skips events
-        that aren't actionable for that agent — i.e. drops echoes of completed
-        / failed / deleted tasks and tasks assigned to someone else. A pending
-        task (any claimer) and an assigned-to-me task both count as actionable.
+        Pops and returns one Task. Filters:
+
+        - `only_events`: if set, return tasks only when their event_name is in
+          this set (e.g. `{"created"}` for workers waiting for new work,
+          `{"completed","failed"}` for leads waiting for assignee outcomes).
+          Default `{"created"}` if actionable_for_id is also given, else None.
+
+        - `actionable_for_id`: if set, additionally requires the task to be
+          either pending (any claimer may grab it, broker enforces caps) or
+          assigned to that agent id. Filters out echoes for other agents.
+
+        Returns the matching Task, or None on timeout / stop.
         """
+        if only_events is None and actionable_for_id is not None:
+            only_events = {"created"}
         deadline = asyncio.get_event_loop().time() + timeout
         while True:
             while self._task_event_queue:
-                task = self._task_event_queue.pop(0)
+                event_name, task = self._task_event_queue.pop(0)
+                if only_events is not None and event_name not in only_events:
+                    continue
                 if actionable_for_id is None:
                     return task
                 if task.status == "pending":
@@ -207,7 +223,7 @@ class BrokerClient:
             if isinstance(env, MessageEnvelope):
                 self._message_queue.append(env.payload.message)
             elif isinstance(env, TaskEventEnvelope):
-                self._task_event_queue.append(env.payload.task)
+                self._task_event_queue.append((env.payload.event, env.payload.task))
             elif isinstance(env, AgentEventEnvelope):
                 if env.to_agent is not None and env.payload.event == "online":
                     self.agent = env.payload.agent

@@ -32,9 +32,15 @@ async def _run(broker_url: str, api_key: str, poll_interval: float) -> None:
                     json.dumps({"kind": "message", "data": m.model_dump(mode="json")}),
                     flush=True,
                 )
-            for t in client.drain_task_events():
+            for event_name, t in client.drain_task_events():
                 print(
-                    json.dumps({"kind": "task_event", "data": t.model_dump(mode="json")}),
+                    json.dumps(
+                        {
+                            "kind": "task_event",
+                            "event": event_name,
+                            "data": t.model_dump(mode="json"),
+                        }
+                    ),
                     flush=True,
                 )
     finally:
