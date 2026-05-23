@@ -4,23 +4,29 @@
 
 Spin up the broker on any reachable host, register one API key per agent, and Claude Code / Gemini CLI instances on separate boxes can list each other, exchange direct messages, and pass tasks back and forth. Tasks can require specific model capabilities (e.g. `tier:opus`, `family:claude`, `vision`) so high-stakes work only goes to agents that can handle it. Claude Code integration ships today via MCP stdio; REST + WebSocket are open for any other language or LLM framework to plug in.
 
-> **Status:** Phase 1 (core) + Phase 1.5 (deployment) + Phase 2.1 (capability routing) + Phase 2.2 (task delete + observability) + Phase 3a Roster (`match_agents` + freshness + capability self-update) complete. 93 tests, real-subprocess end-to-end demos, one-shot installer for Linux PCs, live cross-machine setup on Linux (broker) ↔ macOS (Claude Code via MCP), and live multi-agent filter-broadcast demo (claude-mac opus + worker-linux sonnet) — tasks with `required_all=[tier:opus]` reach claude-mac but never reach worker-linux, verified end-to-end. Task dependencies / channels / shared context / Python SDK adapters land in Phase 3 onwards.
+> **Status:** Phase 1 (core) + Phase 1.5 (deployment) + Phase 2.1 (capability routing) + Phase 2.2 (task delete + observability) + Phase 3a Roster + **Phase 3 worker daemon SDK** complete. 154 tests, real-subprocess end-to-end demos, one-shot installers for both broker and worker hosts, live cross-machine multi-LLM proof: claude-mac (Opus via Anthropic API) as lead orchestrates worker-gpt-oss-cloud (gpt-oss:120b via Ollama Cloud) running as a headless `mab-worker` systemd daemon — push-driven task routing settles in ~1 second end-to-end (broker push + daemon claim + Ollama inference + result write-back). Task dependencies / channels / shared context still pending.
 
 ---
 
 ## What's in the box
 
-- **Central broker** — FastAPI + SQLite (WAL) + WebSocket Hub; one binary, zero external dependencies
-- **MCP stdio agent** — `mab-agent` plugs into Claude Code via `.mcp.json` or `claude mcp add`; **13 tools** cover roster discovery (`list_agents` / `match_agents`), self-declaration (`update_my_model` / `update_my_capabilities`), messaging, and full task lifecycle (including `delete_task`)
+Three runtime roles, one repo, one broker URL:
+
+- **Central broker** (`mab-broker`) — FastAPI + SQLite (WAL) + WebSocket Hub; one binary, zero external dependencies
+- **Interactive MCP agent** (`mab-agent`) — plugs into Claude Code via `.mcp.json` or `claude mcp add`; **14 tools** cover roster discovery (`list_agents` / `match_agents`), self-declaration (`update_my_model` / `update_my_capabilities`), messaging, full task lifecycle (including `delete_task`), and push-driven `wait_for_task`. Best for the **lead** orchestrator and any human-in-the-loop dev work
+- **Autonomous worker daemon** (`mab-worker`) — headless Python daemon supervised by `systemd --user`; pulls tasks via push-driven `wait_for_task`, dispatches each through a pluggable LLM adapter, reports back. **Four adapters** ship in-box: `anthropic` (api.anthropic.com direct via httpx), `ollama` (works for local Ollama and Ollama Cloud, also via httpx), `claude-cli` (spawns `claude -p` per task — gives the worker access to Claude Code's full tool ecosystem), and `mock` (in-process echo for tests). Best for **production workers** — daemon mode avoids the Claude Code TUI's user-input-breaks-the-loop race and is supervised, immortal, and observable via journalctl
+
+Plus the cross-cutting machinery:
+
 - **Capability-based routing** — tasks carry `required_all` / `required_any` tag sets; broker filters WS broadcast to matching online agents and rejects mismatched claims (`403`) or directed assignments (`400`)
-- **Model-aware agents** — `mab-agent --model claude-opus-4-7` auto-derives `model:` / `family:` / `tier:` / `provider:` tags so capabilities track the runtime model identity
+- **Model-aware agents** — `--model claude-opus-4-7` auto-derives `model:` / `family:` / `tier:` / `provider:` tags so capabilities track the runtime model identity (works on both `mab-agent` and `mab-worker`)
 - **Push-aware tool responses** — every MCP tool reply embeds `_pending_messages` / `_pending_task_events` counts so Claude Code (which cannot be push-interrupted) is nudged to drain its queue on the next tool call
 - **Atomic task claim** — `UPDATE ... WHERE status='pending' RETURNING` guarantees single-winner semantics under concurrent claims
 - **Task delete with `task_event:deleted`** — creator or current assignee can drop a task in any state; broker auto-clears the assignee's `current_task` and broadcasts the deletion
 - **Offline message backfill** — messages addressed to an offline agent persist for 7 days; the agent receives them on next reconnect
 - **Auto-reconnecting WS client** — exponential backoff (1→2→4…60s), application-layer text heartbeat keeps `last_heartbeat` fresh on the broker
 - **Observability tool** — `tools/watch.py` connects to the broker as a non-MCP agent and prints every received WS event to stdout; the easiest way to verify filter broadcast or chase routing bugs from a third machine
-- **One-shot deployment** — `deploy/install.sh` sets up uv venv + systemd user service in a single command; broker runs persistently without ongoing sudo
+- **One-shot deployment** — `deploy/install.sh` (broker), `deploy/setup-agent.sh` (Claude Code MCP wiring), `deploy/setup-worker.sh` (daemon) — each is idempotent; `deploy/update.sh` does git pull + uv sync + service restart in one go
 
 ## Quickstart
 
@@ -33,20 +39,32 @@ uv sync
 uv run mab-broker serve         # listens on 0.0.0.0:8420
 ```
 
-For a production-style install with systemd user service (Linux), use the one-shot installer:
+For a production-style install with systemd user services (Linux), use the one-shot installers:
 
 ```bash
-./deploy/install.sh             # broker: install + start (one sudo for enable-linger)
-./deploy/setup-agent.sh         #   ↓ wire Claude Code as an agent (any host)
+# Broker host
+./deploy/install.sh                                          # one sudo for enable-linger; rest non-sudo
+
+# Interactive Claude Code agent (any host — lead, dev, debug)
+./deploy/setup-agent.sh \
     --broker-url http://broker-host:8420 \
     --api-key   mab-ak-XXXX \
     --model     claude-opus-4-7
 
-./deploy/update.sh              # broker: pull + sync + restart + /health verify
-./deploy/uninstall.sh           # broker: remove unit, keep DB
+# Headless worker daemon (any host — production task processor)
+./deploy/setup-worker.sh \
+    --broker-url http://broker-host:8420 \
+    --api-key   mab-ak-YYYY \
+    --adapter   ollama \
+    --model     gpt-oss:120b-cloud \
+    --ollama-base-url http://localhost:11434           # via local Ollama proxy
+
+# Update + uninstall
+./deploy/update.sh                                           # any host: pull + sync + restart + verify
+./deploy/uninstall.sh                                        # broker host: remove unit, keep DB
 ```
 
-`update.sh` refuses to run on a dirty tree and uses `git pull --ff-only`, so it never overwrites local commits — safe to run on production hosts unattended. `setup-agent.sh` validates broker reachability + API key before writing MCP config, and creates a backup of `~/.claude.json` on the fallback path. See [`deploy/README.md`](deploy/README.md) for the full flow.
+`update.sh` refuses to run on a dirty tree and uses `git pull --ff-only`, so it never overwrites local commits — safe to run on production hosts unattended. `setup-agent.sh` validates broker reachability + API key before writing MCP config, and creates a backup of `~/.claude.json` on the fallback path. `setup-worker.sh` writes a `chmod 600` systemd unit with all config (including secrets) as `Environment=` lines — `--name <suffix>` lets one host run several workers in parallel (`mab-worker-opus.service` + `mab-worker-llama.service`, etc.). See [`deploy/README.md`](deploy/README.md) for the full flow.
 
 ### Generate an API key per agent
 
@@ -98,6 +116,40 @@ Restart Claude Code. You'll see 14 tools:
 - **Tasks** — `create_task`, `claim_task`, `update_task`, `delete_task`, `list_tasks`
 - **Worker** — `wait_for_task` (push-driven block on broker WS, used by /worker-mode)
 
+### Install a worker daemon (production)
+
+For headless task execution without a Claude Code session in the loop, install `mab-worker` as a systemd user service:
+
+```bash
+# On the worker host (broker generated the key, then handed it to you)
+./deploy/setup-worker.sh \
+  --broker-url http://broker-host:8420 \
+  --api-key   mab-ak-YYYYYYYYYYYYYY \
+  --adapter   ollama \
+  --model     gpt-oss:120b-cloud \
+  --ollama-base-url http://localhost:11434       # local Ollama proxies to Ollama Cloud
+```
+
+Adapter choices (`--adapter`):
+
+| Adapter | Backend | Best for |
+|---------|---------|----------|
+| `anthropic` | POST to `api.anthropic.com/v1/messages` direct via httpx | Pure-LLM tasks against the official Claude API |
+| `ollama` | POST to `/api/chat` direct via httpx; auto-handles local + Ollama Cloud auth | Local GPU models or Ollama Cloud-routed models like `gpt-oss:120b-cloud` |
+| `claude-cli` | Spawns `claude -p <prompt>` per task | Tasks needing Claude Code's tool ecosystem (Bash / Edit / Read / web). Heaviest cold start but most capable |
+| `mock` | In-process echo | Smoke tests, dry runs |
+
+After install, the daemon is supervised:
+
+```bash
+systemctl --user status mab-worker.service        # is it up?
+journalctl --user -u mab-worker.service -f        # tail logs
+systemctl --user restart mab-worker.service       # apply config / rotate key
+./deploy/update.sh && systemctl --user restart mab-worker.service   # pull repo + restart
+```
+
+Run multiple workers on one host with `--name <suffix>` — e.g. `--name opus-cloud` creates `mab-worker-opus-cloud.service` alongside the default `mab-worker.service`, each with its own unit file, secrets, and journal.
+
 ### Try it out
 
 ```text
@@ -111,18 +163,18 @@ If a non-opus agent tries to claim the same task, the broker returns `403` and t
 
 ### `/lead-mode` + `/worker-mode` slash commands
 
-The repo ships two Claude Code skills (under `.claude/skills/`) that turn any Claude session into either an orchestrator or a worker daemon with one slash command:
+The repo ships two Claude Code skills (under `.claude/skills/`) that turn any Claude session into either an orchestrator or a worker with one slash command:
 
 | Command | Role | What it does |
 |---------|------|--------------|
 | `/lead-mode` | Planner / dispatcher | Scouts the roster, decomposes user goals into sub-tasks, picks best-fit agents by capability, monitors progress, synthesizes results |
-| `/worker-mode` | Autonomous executor | Blocks on `wait_for_task` (push-driven, sub-second latency); claims new work the instant the broker pushes it, executes per task description, reports `completed` or `failed`, loops |
+| `/worker-mode` | Interactive worker | Blocks on `wait_for_task` (push-driven, sub-second latency); claims new work the instant the broker pushes it, executes per task description, reports `completed` or `failed`, loops. **For production workers, prefer `mab-worker` daemon** — `/worker-mode` is fine for dev / debug, but Claude Code's interactive TUI means a stray user keystroke breaks the loop. The daemon has no TUI and is supervised by systemd. |
 
 Typical multi-host setup:
-- **Lead host (e.g. your laptop)** — `/lead-mode` once, then talk to it like a project manager
-- **Worker hosts (e.g. a Linux box, a GPU machine)** — `/worker-mode` once, leave it running
+- **Lead host (laptop)** — `/lead-mode` once in Claude Code, then talk to it like a project manager
+- **Production worker hosts (GPU / cloud-LLM boxes)** — `setup-worker.sh` once, daemon runs forever in background
 
-The skills are pure prompt + existing MCP tools — no daemon process, no new Python. Worker mode runs push-driven via the `wait_for_task` MCP tool (blocks on mab-agent's WS event queue, returns within ~100ms of broker push); no polling, sub-second routing latency.
+The skills are pure prompt + existing MCP tools — no daemon process, no new Python. Worker mode runs push-driven via the `wait_for_task` MCP tool (blocks on mab-agent's WS event queue, returns within ~100ms of broker push); no polling, sub-second routing latency. The standalone `mab-worker` daemon uses the same primitive but bypasses Claude Code entirely — see [`deploy/README.md`](deploy/README.md).
 
 See the skill files themselves for the full behaviour spec.
 
@@ -150,16 +202,23 @@ Then create tasks from elsewhere with different `required_all` sets — non-matc
                   │  REST  /api/v1/{agents|messages|tasks}     │
                   │  WS    /api/v1/ws  (push channel)          │
                   │  Capability matcher filters task broadcast │
-                  └──┬──────────────────────────────────────┬──┘
-                     │                                      │
-                 WS (push)                              WS (push)
-            REST (pull/control)                    REST (pull/control)
-                     │                                      │
-              ┌──────┴──────┐                        ┌──────┴──────┐
-              │  mab-agent  │ ←—— stdio MCP ——→ Claude Code (Mac)
-              │ (per-host)  │                        Gemini CLI / Ollama
-              └─────────────┘                        (Phase 3 adapters)
+                  └──┬─────────────────────┬──────────────────┘
+                     │                     │
+              WS push + REST        WS push + REST
+                     │                     │
+            ┌────────┴────────┐    ┌───────┴───────────┐
+            │   mab-agent     │    │  mab-worker       │
+            │   (MCP stdio)   │    │  (systemd daemon) │
+            │                 │    │                   │
+            │ Claude Code     │    │  Adapter:         │
+            │ /lead-mode      │    │   anthropic       │
+            │ /worker-mode    │    │   ollama          │
+            │ (interactive)   │    │   claude-cli      │
+            └─────────────────┘    └───────────────────┘
+              lead / dev box           production worker
 ```
+
+Roles compose. A small setup has the broker, one lead `mab-agent` on the user's laptop, and one `mab-worker` daemon on each GPU / model host. The broker is the only piece that needs to be reachable from every other; agents and workers are clients.
 
 ### Message + task flow
 
@@ -310,7 +369,7 @@ CLI flags on `mab-agent` mirror the env vars; CLI takes precedence.
 
 ```bash
 uv run pytest
-# 93 tests, ~25s — includes real-subprocess end-to-end demo
+# 154 tests, ~35s — includes real-subprocess end-to-end demo + live-broker daemon integration
 ```
 
 Test layout:
@@ -319,12 +378,18 @@ Test layout:
 |------|----------|
 | `tests/test_db.py` | SQLite CRUD, atomic claim, TTL cleanup, capability migration |
 | `tests/test_auth.py` | API key hashing, Bearer validation, name conflict / auto-suffix |
-| `tests/test_capabilities.py` | Capability matcher (AND-of-all + AND-of-any), model→tag derivation |
+| `tests/test_capabilities.py` | Capability matcher (AND-of-all + AND-of-any), model→tag derivation (Claude / GPT / Gemini / Llama / Qwen / DeepSeek / gpt-oss / Phi + Ollama tag heuristic) |
 | `tests/test_routes.py` | REST routes against in-process FastAPI, including capability validation + task delete (creator / assignee / non-owner / 404) |
 | `tests/test_websocket.py` | Hub routing, backfill, agent/task events, capability filter broadcast |
 | `tests/test_broker_client.py` | `BrokerClient` against a live uvicorn broker (including app heartbeat) |
 | `tests/test_mcp_server.py` | MCP tool wiring (14 tools) + `_pending_messages` interceptor + `update_my_model` derivation + `wait_for_task` push/timeout/filter |
 | `tests/test_e2e_demo.py` | `mab-broker serve` + 2× `mab-agent` via MCP stdio (4 demo scenarios) |
+| `tests/worker/test_mock_adapter.py` | MockAdapter contract: fixed / callable / async / error / delay / lifecycle |
+| `tests/worker/test_daemon.py` | WorkerDaemon against live broker: directly-assigned tasks, open-pool claim, adapter error path, per-task timeout, multi-task survival, capability declaration, setup/teardown, stats |
+| `tests/worker/test_anthropic_adapter.py` | AnthropicAdapter against `httpx.MockTransport`: happy path, system prompt + temperature, multi-block concat, non-text-block skip, HTTP error mapping, empty response, missing key |
+| `tests/worker/test_ollama_adapter.py` | OllamaAdapter against `httpx.MockTransport`: local no-auth, cloud bearer, system prompt, response trim, HTTP error, malformed response |
+| `tests/worker/test_claude_cli_adapter.py` | ClaudeCLIAdapter with a temp Python shim mimicking `claude` CLI: version probe, model + flag wiring, prompt template, exit code mapping, empty stdout, subprocess kill on cancel, extra args |
+| `tests/worker/test_cli.py` | `mab-worker` CLI: parse_capabilities, build_adapter for each of 4 adapters, env-var defaults, required-flag validation |
 
 ---
 
@@ -334,10 +399,9 @@ Test layout:
 - **Phase 1.5** ✅ — one-shot deployment (uv + systemd user service)
 - **Phase 2.1** ✅ — capability-based task routing
 - **Phase 2.2** ✅ — task delete + `tools/watch.py` observability + live multi-agent cross-machine verification
-- **Phase 3a (partial)** ✅ — Lead Agent enablers: roster (`match_agents` + `is_stale` + `current_task` freshness), capability self-update MCP tools (`update_my_model` / `update_my_capabilities`), pre-WS capability declaration to close the startup race
-- **Phase 3a (next)** — task `depends_on`, channels, `tools/lead_demo.py`
-- **Phase 2 (remaining)** — shared code/context (pin spec / design notes)
-- **Phase 3** — Python SDK + OpenAI / Ollama / LangChain adapters
+- **Phase 3a** ✅ — Lead Agent enablers: roster (`match_agents` + `is_stale` + `current_task` freshness), capability self-update MCP tools (`update_my_model` / `update_my_capabilities`), pre-WS capability declaration, push-driven `wait_for_task` MCP tool
+- **Phase 3** ✅ — `mab-worker` daemon SDK + 4 adapters (Anthropic / Ollama / Claude CLI / Mock), `setup-worker.sh` one-shot install, push-driven event-name-filtered task queue. Production-verified: claude-mac (Opus) → broker → daemon (gpt-oss:120b via Ollama Cloud) end-to-end in ~1s
+- **Phase 3 (remaining)** — task `depends_on`, channels, shared context, lead-mode demo cookbook
 - **Phase 4** — TLS + JWT + IP allowlist for public-internet deployment
 - **Phase 5** — Web dashboard + message full-text search
 

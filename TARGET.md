@@ -175,9 +175,45 @@ Phase 1 鎖定最小可運行核心：**agent + message + task**。先把兩台 
 
 ---
 
+## Phase 3 — Standalone worker daemon SDK
+
+目標：擺脫「Claude Code session 當 worker」的 user-input race + monitor-sleep 脆弱性，用 standalone Python daemon 跑 production workers，supervised by systemd。Adapter 抽象支援 Anthropic / Ollama / Claude CLI 三條 backend。
+
+### 決策（已鎖定）
+
+| 項目 | 決定 |
+|------|------|
+| Worker 架構 | Path C — standalone daemon，不是 Claude Code session（user input + Monitor sleep 兩個脆弱點都不在 daemon path 上） |
+| Adapter 抽象 | `LLMAdapter` abc，subclass `run_task(task) -> str`；optional setup/teardown |
+| Adapter 依賴 | 零新外部 dep — Anthropic 跟 Ollama 都直接 httpx（既有），claude-cli 是 asyncio subprocess |
+| Push-driven 機制 | 重用 Phase 3a 的 `wait_for_task` MCP primitive；daemon 直接呼叫 BrokerClient.pop_one_task_event |
+| Event filter | `_task_event_queue` 改成 `(event_name, Task)` tuple；daemon 用 `only_events={"created"}` 過濾自己 claim/update echo |
+| Per-task timeout | `asyncio.wait_for` 包 `adapter.run_task`，TimeoutError → mark failed with note |
+| Process supervision | systemd `--user` service + linger，跟 mab-broker 對稱 |
+| 多 worker per host | `--name <suffix>` 變成 `mab-worker-<suffix>.service`，env vars + journal 隔離 |
+
+### Sub-tasks (F)
+
+- [x] **F1.** Worker package skeleton + `LLMAdapter` ABC + `MockAdapter` + 11 unit tests _(commit `226be51`)_
+- [x] **F2.** `AnthropicAdapter` — httpx direct to `/v1/messages`，支援 system prompt / temperature / multi-block concat + 8 tests with httpx.MockTransport _(commit `2df7084`)_
+- [x] **F3.** `OllamaAdapter` — httpx direct to `/api/chat`，local + Ollama Cloud 通吃，bearer auth on cloud + 7 tests _(commit `541e0bd`)_
+- [x] **F4.** `ClaudeCLIAdapter` — asyncio subprocess `claude -p`，prompt template、cancel handler kill subprocess、可選 `--no-skip-permissions` + 11 tests with Python shim binary _(commit `620964e`)_
+- [x] **F5.** `WorkerDaemon` main loop — PATCH caps before WS connect、catch-up scan、push-driven via wait_for_task、per-task timeout、signal handler、error path mark failed not crash + 14 tests against live broker _(commit `28fd4ae`)_
+- [x] **F6.** `mab-worker` CLI + pyproject script entry — per-adapter flag groups、env var defaults、required-flag validation + 13 tests _(commit `8a5da71`)_
+- [x] **F7.** `deploy/setup-worker.sh` — 一鍵裝 daemon + 寫 systemd unit (chmod 600)、validate broker + key、poll for online、idempotent re-run、`--name` 多 worker per host _(commit `361d765`)_
+- [x] **F8.** README + skill + TARGET 完整 update for Phase 3：3-role architecture diagram、Quickstart 多 daemon 區塊、roadmap tick、test layout 完整
+- [ ] **F9.** End-to-end demo test：daemon + live broker + MockAdapter，多 task lifecycle 走完整 push-driven loop
+
+### Production verification
+
+- 2026-05-22 06:34 UTC: cross-machine demo 跑通。Mac claude-mac (Opus) curl `POST /tasks {required_all:[tier:reasoning, host:cloud]}` → broker push → 212 `mab-worker.service` (gpt-oss:120b-cloud via local Ollama → Ollama Cloud routing) → result `"daemon ok"`、notes `[picked up by worker daemon (ollama), done]`、**1.09 秒 end-to-end**（含 ~800ms gpt-oss inference + 100ms daemon pop + ~50ms broker round-trips）
+- 對照之前 Claude Code `/worker-mode` push-driven 版的同樣 probe：6.05s
+- 對照最早的 Monitor sleep 版：5+ 分鐘卡死
+
+---
+
 ## 後續 Phase（暫定）
 
-- **Phase 2**（剩餘）：Shared context（pin spec / 設計筆記）
-- **Phase 3**：Python SDK + OpenAI / Ollama / LangChain adapters
+- **Phase 3**（剩餘）：task `depends_on`、channels、shared context（pin spec / 設計筆記）、lead-mode demo cookbook
 - **Phase 4**：外網部署（TLS / wss / JWT / IP allowlist）
 - **Phase 5**：Web dashboard + 訊息全文檢索
