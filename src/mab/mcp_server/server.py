@@ -204,13 +204,22 @@ async def create_task(
     priority: str = "normal",
     required_all: list[str] | None = None,
     required_any: list[str] | None = None,
+    depends_on: list[str] | None = None,
 ) -> str:
     """Create a task. assigned_to=null leaves it open. priority: low, normal, high, urgent.
 
     Capability routing: required_all = tags every claimer must have (AND).
     required_any = at least one of these tags required (OR). Both default to empty
     (any agent can claim). Common tags: model:<exact>, family:claude, tier:opus,
-    provider:anthropic, plus free-form flags like vision, audio."""
+    provider:anthropic, plus free-form flags like vision, audio.
+
+    depends_on: list of upstream task IDs that must complete before this task
+    is dispatchable. Lets you fire a multi-step plan in one go — broker holds
+    each downstream task as `blocked` until its full dependency set is
+    `completed`, then auto-emits task_event:created. If any upstream fails,
+    the entire downstream subtree cascades to `failed` with a note.
+    Workers fetch upstream results via mcp__mab__list_tasks / get_task_info
+    when their description references the upstream IDs."""
     task = await _client_or_raise().create_task(
         title=title,
         description=description,
@@ -218,6 +227,7 @@ async def create_task(
         priority=priority,  # type: ignore[arg-type]
         required_all=required_all,
         required_any=required_any,
+        depends_on=depends_on,
     )
     return _to_json(task.model_dump(mode="json"))
 

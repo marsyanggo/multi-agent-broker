@@ -318,6 +318,7 @@ class BrokerClient:
         priority: TaskPriority = "normal",
         required_all: list[str] | None = None,
         required_any: list[str] | None = None,
+        depends_on: list[str] | None = None,
     ) -> Task:
         body: dict[str, Any] = {
             "title": title,
@@ -329,6 +330,8 @@ class BrokerClient:
             body["required_all"] = required_all
         if required_any:
             body["required_any"] = required_any
+        if depends_on:
+            body["depends_on"] = depends_on
         r = await self._http.post("/api/v1/tasks", json=body)
         r.raise_for_status()
         return Task.model_validate(r.json())

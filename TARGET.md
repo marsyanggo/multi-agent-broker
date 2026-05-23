@@ -236,8 +236,51 @@
 
 ---
 
+## Phase 3 — Task dependencies (depends_on)
+
+目標：解 lead 拆 multi-step plan 必踩痛點 — 之前要 lead poll 中間結果再 craft 下一個 task description。`depends_on` 讓 lead **一次派完整個 plan**，broker 自動 gate downstream task 直到 upstream 完成。
+
+### 決策（已鎖定）
+
+| 項目 | 決定 |
+|------|------|
+| State model | 重用既有的 `status="blocked"` 表達「waiting on deps」 |
+| Immutability | `depends_on` create-time set only — 不能 update 後改。Cycle 因此數學上不可能（不用 detection）|
+| Unblock trigger | upstream `completed` → broker post-hook 掃 downstream blocked，全 deps 完成就 flip 成 pending + emit task_event:created 走原本 cap filter broadcast |
+| Failure cascade | upstream `failed` 或 `delete` → downstream `failed` with note，**遞迴 propagate**（A→B→C 全 fail）|
+| Result injection | worker 自己 fetch（broker 不轉 — 保持 passive bus）。task description 寫 "see result of task X"，worker 用 `get_task(X)` 拿 |
+| Block-not-broadcast | task status="blocked" 時 broker **完全不 emit task_event:created**。Worker 看不到、claim 自然 reject |
+| Claim 邏輯 | 既有 atomic SQL `WHERE status='pending'` 自動排除 blocked。Lead 無需改 claim 邏輯 |
+
+### Sub-tasks (D)
+
+- [x] **D1.** Task `depends_on: list[str]` + DB ALTER ADD COLUMN + create_task validation + initial status (blocked vs pending)
+- [x] **D2.** Cycle detection — **moot, skipped**（depends_on immutable，cycle 數學上不可能）
+- [x] **D3.** `_propagate_completion` hook in update_task — 全 deps 完成才 unblock + emit
+- [x] **D4.** `_propagate_failure` hook — upstream fail/delete 遞迴 cascade downstream
+- [x] **D5.** Tests — chain unblock、fan-in、3-step failure cascade、unknown dep reject、already-failed dep reject、already-completed dep skip-blocked
+- [x] **D6.** MCP `create_task` tool + `BrokerClient.create_task` 加 `depends_on` 參數
+- [x] **D7.** `/lead-mode` skill — 教 LLM 用 depends_on（fan-in vs sequential chain trade-off）
+- [x] **D8.** TARGET / README 更新
+
+### Production thesis
+
+`depends_on` 讓 cross-vendor multi-step workflow 從「lead 端 手動 orchestration」變成「broker 自動 gate」。e.g.:
+
+```python
+plan = create_task("Outline strategy", required_all=["tier:opus"])           # Claude Opus
+draft = create_task("Write 500 words based on plan {plan_id}",               # gpt-oss reasoning
+                    required_all=["tier:reasoning"], depends_on=[plan])
+review = create_task("Polish style + check facts for draft {draft_id}",      # Claude Sonnet
+                     required_all=["tier:sonnet"], depends_on=[draft])
+```
+
+Lead 派完 3 個 task 就 done — broker 串行 gate、自動 cap routing、失敗自動 cascade。**這是真正讓 cross-vendor LLM workflow 可工程化的 piece**。
+
+---
+
 ## 後續 Phase（暫定）
 
-- **Phase 3**（剩餘）：task `depends_on`、channels、shared context（pin spec / 設計筆記）、lead-mode demo cookbook
+- **Phase 3**（剩餘）：channels、shared context（pin spec / 設計筆記）、lead-mode demo cookbook
 - **Phase 4**：外網部署（TLS / wss / JWT / IP allowlist）
 - **Phase 5**：Web dashboard + 訊息全文檢索

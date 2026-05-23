@@ -46,24 +46,46 @@ When the user gives you a goal:
    ```
 4. After user OKs (or for trivial goals, immediately), proceed to dispatch.
 
-## Step 3 — Dispatch
+## Step 3 — Dispatch (use `depends_on` for multi-step plans)
 
-For each sub-task in dependency order:
+For multi-step plans the broker supports `depends_on: list[task_id]` — a downstream task starts in `status="blocked"` and the broker auto-flips it to `pending` (with the normal capability-filter broadcast) only when its full dependency set is `completed`. **You can fire the whole plan at once** instead of polling between steps.
 
-1. Call `mcp__mab__create_task(title=..., description=..., assigned_to=... OR required_all=[...])`.
-   - **Description must be self-contained** — workers won't ask follow-up questions. Include any prior sub-task results that this one depends on.
-   - If task depends on earlier sub-task X, **wait for X to be `completed`** before creating this one (read X's result, embed in description).
-2. Note the returned `task.id`.
+Two flavours:
+
+**Flavour A — fan-in plan (preferred when the structure is fixed):**
+
+```
+1. create_task(title="step A", required_all=[tier:opus]) → got id A
+2. create_task(title="step B", required_all=[tier:reasoning]) → id B
+3. create_task(title="step C — combine results from A and B",
+              description="Read result of task <A> and task <B>, then synthesise...",
+              required_all=[tier:opus],
+              depends_on=[A, B])  → id C, starts as `blocked`
+```
+
+When A + B both complete, C unblocks automatically. Worker for C uses `mcp__mab__list_tasks(...)` or `mcp__mab__get_agent_info` to fetch upstream results — the broker does NOT inject them into the description; the worker reads them itself.
+
+**Flavour B — sequential chain (when each step needs the previous result inline):**
+
+If the downstream prompt MUST contain the upstream result verbatim (e.g. "polish this exact draft"), you still need to dispatch step-by-step: create step N, wait for `completed`, read result, craft step N+1's description with that result inlined, then create step N+1. Use this only when `depends_on` isn't enough.
+
+For each sub-task:
+
+1. Call `mcp__mab__create_task(title=..., description=..., assigned_to=... OR required_all=[...], depends_on=[...])`.
+2. **Description must be self-contained** for the parts the worker can solve without context. If you're using `depends_on`, mention the upstream task IDs explicitly so the worker knows what to fetch.
+3. Note the returned `task.id` and its initial status. Tasks with deps will show `status="blocked"` until upstream completes.
+4. Cycles are impossible by construction (deps are immutable post-create). Upstream failure cascades automatically to all downstream — you don't have to clean up manually.
 
 ## Step 4 — Monitor
 
 After dispatching one or more open tasks:
 
-1. Poll `mcp__mab__list_tasks(created_by=<my id>)` every 30s (use `Bash("sleep 30")` between polls).
+1. Poll `mcp__mab__list_tasks(created_by=<my id>)` every 30s (use `Monitor` tool, not standalone `Bash sleep` — Claude Code blocks long foreground sleeps).
 2. Watch for status transitions on tracked task ids:
-   - `assigned` → `in_progress` → `completed` / `failed`
-3. If a task is `assigned` or `in_progress` for more than 10 minutes without a note update, flag to user — the worker may be stuck.
-4. If a task is `failed`, read its notes for context. Decide: re-create with clearer description, route to a different agent, or escalate to user.
+   - `blocked` (waiting on deps) → `pending` (broker just unblocked) → `assigned` (worker claimed) → `in_progress` → `completed` / `failed`
+3. With `depends_on`, broker handles intermediate transitions automatically — you only need to watch the LAST task in the chain to know the plan finished.
+4. If a task is `assigned` or `in_progress` for more than 10 minutes without a note update, flag to user — the worker may be stuck.
+5. If a task is `failed`, read its notes for context. Note: if it failed because of upstream failure (note contains "upstream dependency X failed"), the whole downstream subtree already cascaded — don't try to retry each one. Re-route the broken upstream and the rest replays.
 
 ## Step 5 — Synthesize
 
