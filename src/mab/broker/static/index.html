@@ -72,8 +72,8 @@
       flex: 1;
       min-height: 0;
       display: grid;
-      grid-template-columns: 1fr 2fr 1fr;
-      grid-template-rows: 1fr 1fr;
+      grid-template-columns: 1fr 2.5fr 1fr;
+      grid-template-rows: 1fr 2fr;
       grid-template-areas:
         "agents  tasks    channels"
         "agents  graph    contexts";
@@ -92,11 +92,11 @@
     }
 
     .panel h2 {
-      font-size: 11px;
+      font-size: 10px;
       font-weight: bold;
       text-transform: uppercase;
-      letter-spacing: 0.1em;
-      padding: 8px 12px;
+      letter-spacing: 0.08em;
+      padding: 4px 8px;
       border-bottom: 1px solid #ccc;
       flex-shrink: 0;
       color: #535353;
@@ -105,16 +105,16 @@
     .panel > div:not(.filter-bar) {
       flex: 1;
       overflow-y: auto;
-      padding: 8px 12px;
+      padding: 4px 8px;
       font-size: 12px;
       min-height: 0;
     }
 
     .filter-bar {
       flex: 0 0 auto;
-      padding: 6px 12px;
+      padding: 3px 8px;
       border-bottom: 1px solid #ccc;
-      font-size: 12px;
+      font-size: 11px;
       overflow: hidden;
     }
 
@@ -221,14 +221,14 @@ function renderAgentsPanel(snapshot) {
 
   snapshot.agents.forEach((agent, i) => {
     const row = document.createElement('div');
-    row.style.cssText = 'display:flex;gap:8px;align-items:baseline;padding:6px 0;border-bottom:1px solid #eee;';
+    row.style.cssText = 'display:flex;gap:6px;align-items:baseline;padding:2px 0;border-bottom:1px solid #eee;';
 
     const dot = document.createElement('span');
-    dot.style.cssText = 'font-size:14px;color:' + dotColor(agent) + ';';
+    dot.style.cssText = 'font-size:11px;color:' + dotColor(agent) + ';';
     dot.textContent = '●';
 
     const name = document.createElement('span');
-    name.style.cssText = 'font-weight:bold;font-size:13px;font-family:monospace;';
+    name.style.cssText = 'font-weight:bold;font-size:12px;font-family:monospace;';
     name.textContent = agent.name;
 
     const tag = document.createElement('span');
