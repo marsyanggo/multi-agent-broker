@@ -29,3 +29,7 @@ build/
 
 # Demo recordings — uploaded to GitHub releases, not committed to git
 demo/
+
+# Google CLI runtime state (OAuth tokens, config) when CLI is run from repo root
+.antigravitycli/
+.gemini/
