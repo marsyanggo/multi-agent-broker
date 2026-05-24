@@ -6,6 +6,7 @@ import pytest
 
 from mab.worker.adapters.anthropic import AnthropicAdapter
 from mab.worker.adapters.claude_cli import ClaudeCLIAdapter
+from mab.worker.adapters.codex_cli import CodexCLIAdapter
 from mab.worker.adapters.gemini import GeminiAdapter
 from mab.worker.adapters.mock import MockAdapter
 from mab.worker.adapters.ollama import OllamaAdapter
@@ -109,6 +110,34 @@ def test_build_adapter_claude_cli_no_skip_permissions() -> None:
     adapter = build_adapter(args)
     assert isinstance(adapter, ClaudeCLIAdapter)
     assert adapter.skip_permissions is False
+
+
+def test_build_adapter_codex_cli() -> None:
+    args = _parse(
+        "--broker-url", "http://x", "--api-key", "k",
+        "--model", "gpt-5",
+        "--adapter", "codex-cli",
+        "--codex-bin", "/usr/local/bin/codex",
+        "--codex-prompt-template", "{title}: {description}",
+    )
+    adapter = build_adapter(args)
+    assert isinstance(adapter, CodexCLIAdapter)
+    assert adapter.model == "gpt-5"
+    assert adapter.codex_bin == "/usr/local/bin/codex"
+    assert adapter.prompt_template == "{title}: {description}"
+    assert adapter.skip_git_repo_check is True
+
+
+def test_build_adapter_codex_cli_no_skip_git_check() -> None:
+    args = _parse(
+        "--broker-url", "http://x", "--api-key", "k",
+        "--model", "gpt-5",
+        "--adapter", "codex-cli",
+        "--no-skip-git-repo-check",
+    )
+    adapter = build_adapter(args)
+    assert isinstance(adapter, CodexCLIAdapter)
+    assert adapter.skip_git_repo_check is False
 
 
 def test_build_adapter_gemini() -> None:

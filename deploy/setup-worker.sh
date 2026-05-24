@@ -38,10 +38,12 @@ OLLAMA_API_KEY_V="${OLLAMA_API_KEY:-}"
 GEMINI_API_KEY_V="${GEMINI_API_KEY:-}"
 GEMINI_BASE_URL="${GEMINI_BASE_URL:-https://generativelanguage.googleapis.com}"
 CLAUDE_BIN="${CLAUDE_BIN:-claude}"
+CODEX_BIN="${CODEX_BIN:-codex}"
 SYSTEM_PROMPT="${MAB_SYSTEM_PROMPT:-}"
 PER_TASK_TIMEOUT="${MAB_PER_TASK_TIMEOUT:-600}"
 WAIT_FOR_TASK_TIMEOUT="${MAB_WAIT_FOR_TASK_TIMEOUT:-60}"
 NO_SKIP_PERMISSIONS=false
+NO_SKIP_GIT_REPO_CHECK=false
 
 usage() {
     cat <<EOF
@@ -50,7 +52,7 @@ Usage: $0 [options]
 Required:
   --broker-url URL          broker REST endpoint
   --api-key KEY             mab-ak-... API key for this worker's agent
-  --adapter NAME            one of: anthropic, ollama, claude-cli, gemini, mock
+  --adapter NAME            one of: anthropic, ollama, claude-cli, codex-cli, gemini, mock
   --model MODEL             model identifier (e.g. claude-sonnet-4-6,
                             gpt-oss:120b-cloud, gemini-2.5-flash, llama3.3:70b)
 
@@ -81,6 +83,10 @@ Claude CLI adapter:
   --claude-bin PATH         default \$CLAUDE_BIN or "claude"
   --no-skip-permissions     don't pass --dangerously-skip-permissions
 
+Codex CLI adapter (OpenAI ChatGPT subscription, run \`codex login\` first):
+  --codex-bin PATH          default \$CODEX_BIN or "codex"
+  --no-skip-git-repo-check  don't pass --skip-git-repo-check to codex exec
+
 Env vars are honoured as defaults for the matching flag. Secrets in the
 unit file are at \$HOME/.config/systemd/user/<unit>.service (chmod 600).
 EOF
@@ -101,6 +107,8 @@ while [[ $# -gt 0 ]]; do
         --gemini-api-key)        GEMINI_API_KEY_V="$2"; shift 2 ;;
         --gemini-base-url)       GEMINI_BASE_URL="$2"; shift 2 ;;
         --claude-bin)            CLAUDE_BIN="$2"; shift 2 ;;
+        --codex-bin)             CODEX_BIN="$2"; shift 2 ;;
+        --no-skip-git-repo-check) NO_SKIP_GIT_REPO_CHECK=true; shift ;;
         --system-prompt)         SYSTEM_PROMPT="$2"; shift 2 ;;
         --per-task-timeout)      PER_TASK_TIMEOUT="$2"; shift 2 ;;
         --wait-for-task-timeout) WAIT_FOR_TASK_TIMEOUT="$2"; shift 2 ;;
@@ -117,8 +125,8 @@ errs=()
 [[ -z "$ADAPTER" ]] && errs+=("--adapter required")
 [[ -z "$MODEL" ]] && errs+=("--model required")
 case "$ADAPTER" in
-    anthropic|ollama|claude-cli|gemini|mock) ;;
-    *) errs+=("--adapter must be one of: anthropic, ollama, claude-cli, gemini, mock (got '$ADAPTER')") ;;
+    anthropic|ollama|claude-cli|codex-cli|gemini|mock) ;;
+    *) errs+=("--adapter must be one of: anthropic, ollama, claude-cli, codex-cli, gemini, mock (got '$ADAPTER')") ;;
 esac
 if [[ "$ADAPTER" == "anthropic" && -z "$ANTHROPIC_API_KEY_V" ]]; then
     errs+=("anthropic adapter needs --anthropic-api-key or ANTHROPIC_API_KEY")
@@ -208,10 +216,14 @@ case "$ADAPTER" in
     claude-cli)
         ENV_LINES+=("Environment=\"CLAUDE_BIN=$CLAUDE_BIN\"")
         ;;
+    codex-cli)
+        ENV_LINES+=("Environment=\"CODEX_BIN=$CODEX_BIN\"")
+        ;;
 esac
 
 EXEC_FLAGS=""
-$NO_SKIP_PERMISSIONS && EXEC_FLAGS=" --no-skip-permissions"
+$NO_SKIP_PERMISSIONS && EXEC_FLAGS+=" --no-skip-permissions"
+$NO_SKIP_GIT_REPO_CHECK && EXEC_FLAGS+=" --no-skip-git-repo-check"
 
 # --- write unit ---
 mkdir -p "$(dirname "$UNIT_PATH")"

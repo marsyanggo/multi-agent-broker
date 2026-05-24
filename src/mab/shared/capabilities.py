@@ -27,9 +27,21 @@ _KNOWN_MODEL_PREFIXES: dict[str, tuple[str, str]] = {
     "claude-sonnet": ("claude", "sonnet"),
     "claude-haiku": ("claude", "haiku"),
     # OpenAI hosted (closed API)
+    "gpt-5.5": ("openai", "gpt-5"),
     "gpt-5": ("openai", "gpt-5"),
+    "gpt-4.1": ("openai", "gpt-4"),
+    "gpt-4o-mini": ("openai", "gpt-4o-mini"),
     "gpt-4o": ("openai", "gpt-4o"),
     "gpt-4": ("openai", "gpt-4"),
+    # OpenAI reasoning series
+    "o4-mini": ("openai", "reasoning"),
+    "o4": ("openai", "reasoning"),
+    "o3-mini": ("openai", "reasoning"),
+    "o3": ("openai", "reasoning"),
+    "o1-mini": ("openai", "reasoning"),
+    "o1": ("openai", "reasoning"),
+    # OpenAI Codex CLI default model (subscription-routed; aliased to chatgpt)
+    "codex": ("openai", "codex"),
     # OpenAI open-source reasoning (typically via Ollama / vLLM)
     "gpt-oss": ("gpt-oss", "reasoning"),
     # Google

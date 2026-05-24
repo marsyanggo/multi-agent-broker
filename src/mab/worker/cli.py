@@ -15,6 +15,7 @@ import sys
 from mab.worker.adapters.anthropic import AnthropicAdapter
 from mab.worker.adapters.base import LLMAdapter
 from mab.worker.adapters.claude_cli import ClaudeCLIAdapter
+from mab.worker.adapters.codex_cli import CodexCLIAdapter
 from mab.worker.adapters.gemini import GeminiAdapter
 from mab.worker.adapters.mock import MockAdapter
 from mab.worker.adapters.ollama import OllamaAdapter
@@ -23,7 +24,7 @@ from mab.worker.daemon import WorkerDaemon, install_signal_handlers
 log = logging.getLogger("mab.worker")
 
 
-ADAPTER_CHOICES = ("anthropic", "ollama", "claude-cli", "gemini", "mock")
+ADAPTER_CHOICES = ("anthropic", "ollama", "claude-cli", "codex-cli", "gemini", "mock")
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -147,6 +148,26 @@ def build_parser() -> argparse.ArgumentParser:
         help="system prompt prepended to each task (anthropic / ollama / gemini)",
     )
 
+    # --- Codex CLI adapter (OpenAI ChatGPT subscription via `codex exec`) ---
+    g = p.add_argument_group("codex-cli adapter")
+    g.add_argument(
+        "--codex-bin",
+        default=os.environ.get("CODEX_BIN", "codex"),
+        help="path to the codex CLI binary (default $CODEX_BIN or `codex`)",
+    )
+    g.add_argument(
+        "--codex-prompt-template",
+        default=os.environ.get(
+            "MAB_CODEX_PROMPT_TEMPLATE", "{description}"
+        ),
+        help="template substituted with {description},{title},{id} per task",
+    )
+    g.add_argument(
+        "--no-skip-git-repo-check",
+        action="store_true",
+        help="DON'T pass --skip-git-repo-check to codex exec (off by default)",
+    )
+
     # --- Claude CLI adapter ---
     g = p.add_argument_group("claude-cli adapter")
     g.add_argument(
@@ -214,6 +235,13 @@ def build_adapter(args: argparse.Namespace) -> LLMAdapter:
             claude_bin=args.claude_bin,
             prompt_template=args.claude_prompt_template,
             dangerously_skip_permissions=not args.no_skip_permissions,
+        )
+    if args.adapter == "codex-cli":
+        return CodexCLIAdapter(
+            model=args.model,
+            codex_bin=args.codex_bin,
+            prompt_template=args.codex_prompt_template,
+            skip_git_repo_check=not args.no_skip_git_repo_check,
         )
     if args.adapter == "mock":
         return MockAdapter(response=args.mock_response)
