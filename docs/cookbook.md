@@ -645,6 +645,182 @@ That's the graceful-failure path doing its job — capability routing and adapte
 
 ---
 
+## Recipe 8 — Cross-vendor comparison + in-place retry recovery
+
+**Story:** You want to see how three different LLM families approach the same prompt, then have one judge pick a winner. While the dispatch is running, one of the vendor workers hits a transient API failure — and you don't want to scribble around it. You want the failed task to recover *on the same node*, on the same task id, with the dashboard showing the retry as a continuation of the same unit of work rather than as a brand-new sibling.
+
+This recipe combines two patterns that, in isolation, are simple — the fan-out-then-fan-in shape (Recipe 2) and the failure-cascade behaviour (Recipe 3) — and adds the **in-place retry primitive** so a transient failure doesn't pollute the graph or force the lead to manually splice in workarounds.
+
+**Topology:** four parallel sub-tasks under a sentinel "go" gate, with a synthesiser at the bottom; transient failure on one branch recovers through a single `POST /retry` call that also resets cascade-failed downstream.
+
+```
+                  H (lead sentinel — release to start)
+            ╱   ╱  │   ╲   ╲
+           A   B   C   D            (A = criteria;  B = gemini, C = gpt-oss, D = sonnet)
+            ╲   ╲  │   ╱   ╱
+                   E                 (opus, depends_on=[A,B,C,D])
+                                     comparison + character analysis
+
+   Failure path:
+     B → HTTP 503 (transient)         → red
+     E → cascade fail (upstream B)    → red
+   Recovery:
+     POST /tasks/B/retry
+       → B reset to pending           → gray with ↻1 badge
+       → E cascade-reset to blocked   → gray with ↻1 badge
+     Worker picks B                   → amber with ↻ retrying pulse
+     B completes                      → green with ↻1 history badge
+     _propagate_completion fires      → E unblocks → pending → claimed → green ↻1
+   Result: 6 nodes, no duplicates, retry visible as history on the same boxes.
+```
+
+### Dispatch (verified 2026-05-24, four-vendor pool)
+
+```bash
+BROKER=http://192.168.1.212:8420
+LEAD_KEY=mab-ak-XXXX
+
+# 1. Sentinel — hold the whole DAG so user can see the full structure before any work starts.
+SENT=$(curl -sS -X POST -H "Authorization: Bearer $LEAD_KEY" -H "Content-Type: application/json" \
+  -d '{"title": "[demo] launch signal", "assigned_to": "<lead-agent-id>", "required_all": ["tier:opus"]}' \
+  "$BROKER/api/v1/tasks" | jq -r .id)
+
+# 2. Criteria task — opus, depends on sentinel.
+CRIT=$(curl -sS -X POST -H "Authorization: Bearer $LEAD_KEY" -H "Content-Type: application/json" \
+  -d "{\"title\": \"5 evaluation criteria\", \"assigned_to\": \"<lead-id>\",
+       \"required_all\": [\"tier:opus\"], \"depends_on\": [\"$SENT\"]}" \
+  "$BROKER/api/v1/tasks" | jq -r .id)
+
+# 3. Three vendor plans — same prompt, three different family caps.
+PROMPT='Plan a 6-night Tokyo itinerary... [full prompt verbatim across all three]'
+for FAM in "family:google" "family:gpt-oss" 'family:claude","tier:sonnet'; do
+  curl -sS -X POST -H "Authorization: Bearer $LEAD_KEY" -H "Content-Type: application/json" \
+    -d "{\"title\": \"7-day plan — $FAM\", \"description\": \"$PROMPT\",
+         \"required_all\": [$FAM], \"depends_on\": [\"$SENT\"]}" \
+    "$BROKER/api/v1/tasks"
+done
+
+# 4. Comparison task — opus, depends on all four.
+curl -sS -X POST -H "Authorization: Bearer $LEAD_KEY" -H "Content-Type: application/json" \
+  -d "{\"title\": \"Compare vendor plans\", \"assigned_to\": \"<lead-id>\",
+       \"required_all\": [\"tier:opus\"],
+       \"depends_on\": [\"$CRIT\", \"$B_ID\", \"$C_ID\", \"$D_ID\"]}" \
+  "$BROKER/api/v1/tasks"
+
+# 5. User confirms graph looks right → release the sentinel.
+curl -sS -X PATCH -H "Authorization: Bearer $LEAD_KEY" -H "Content-Type: application/json" \
+  -d '{"status": "completed", "result": "released"}' \
+  "$BROKER/api/v1/tasks/$SENT"
+# → cascade unblocks A, B, C, D simultaneously
+# → when all four complete, E unblocks
+```
+
+### The retry path (when a worker hits a transient failure)
+
+In this run, Gemini's first attempt returned HTTP 503 from Google's servers ("This model is currently experiencing high demand"). The adapter caught it cleanly:
+
+```
+B status: failed
+B notes:  ["picked up by worker daemon (gemini)",
+           "adapter error: Gemini API HTTP 503: ...high demand..."]
+```
+
+Cascade fired automatically on E:
+
+```
+E status: failed
+E notes:  ["upstream dependency 18991aca failed"]
+```
+
+Rather than re-dispatch a parallel B-retry / E-redo (which pollutes the graph with sibling nodes), use **`POST /api/v1/tasks/{id}/retry`** on the failed task:
+
+```bash
+curl -sS -X POST -H "Authorization: Bearer $LEAD_KEY" \
+  "$BROKER/api/v1/tasks/$B_ID/retry"
+```
+
+What the broker does:
+1. Verifies status is `failed` (rejects with 400 otherwise)
+2. Counts prior `retry attempt N` notes to compute the next N
+3. Calls `db.reset_task_for_retry()` to clear `result`, `completed_at`, `assigned_to` and set status back to `pending` (or `blocked` if any dep is not yet completed)
+4. Appends a `retry attempt N (after: <prev error excerpt>)` note
+5. Clears the previous assignee's `current_task` pointer
+6. Walks downstream: any task currently `failed` with note `upstream dependency <id> failed` gets reset to `blocked` (recursive — long failure chains repair in one call)
+7. Emits `task_event:created` with capability-matched broadcast so workers re-pick
+
+The MCP equivalent:
+
+```python
+await mcp__mab__retry_task(task_id="18991aca")
+```
+
+After retry, the dashboard shows the **same task box** transition:
+
+| Phase | Status | Visual |
+|---|---|---|
+| Initial failure | `failed` | red border, red fill |
+| Retry call lands | `pending` (or `blocked`) | gray border, gray fill, `↻1` amber badge appears in meta line 2 |
+| Worker re-picks | `assigned` / `in_progress` | amber border, amber fill, meta line 1 becomes `↻ retrying · <dur>` with 1s CSS pulse animation |
+| Success | `completed` | green border, green fill, `↻1` amber badge persists as history |
+| Or failure again | `failed` again | red border, badge → `↻2` if you retry again |
+
+Cascade-reset downstream tasks ride the same lifecycle: gray (blocked) → automatically unblocks via the existing `_propagate_completion` path when the upstream succeeds → amber → green, all with `↻1` badges of their own.
+
+### Observed timing (this run, 2026-05-24)
+
+| Phase | Duration |
+|---|---|
+| Sentinel held the DAG | (user confirmation time) |
+| After release: A + B + C + D parallel | ~60s (gpt-oss + sonnet), B-gemini failed at ~3s |
+| Manual `/retry` call after seeing red | <2s |
+| B picked + completed on attempt 2 | <5s (Gemini happy this time) |
+| E auto-unblock + lead claim + complete | ~30s synthesis |
+| **Whole chain wall-clock** | ~2 minutes including manual retry, vs ~30s no-failure case |
+
+The retry cost is the manual-trigger latency, not the broker plumbing. Worth scoping `retry_on_failure: N` as a task creation hint in a future iteration — see Lesson #4 below.
+
+### Vendor character — what the 3-vendor pool actually looks like
+
+In this Tokyo itinerary task (same prompt to all three):
+
+| Vendor | Wall | Output | Character |
+|---|---|---|---|
+| `worker-gemini-rpi` (gemini-2.5-flash) | ~5s on retry | 3,542 chars | terse, no time markers, lower density, drops some generics. **Factually cleaner** than gpt-oss because it doesn't commit to invented details. Fast/cheap/short — high confidence ceiling. |
+| `worker-gpt-oss-cloud` (gpt-oss:120b) | ~60s | 8,052 chars | exhaustive structuralist. Tables, time-blocks, "Option A / B" alternatives, "Quick Transit Reference" appendix. **Confidently invents details** past page 3 — Tokyo metro routes that don't exist, references to since-relocated venues. |
+| `worker-claude-sonnet` (claude-sonnet-4-6) | ~100s | 6,765 chars | balanced production-grade. Picks accurate venues (chose "teamLab Planets Toyosu" — the operating one — over the relocated "teamLab Borderless"). Adds practical extras the prompt didn't ask for (¥ amounts, IC card tip). Slowest, highest signal-to-noise. |
+
+Per-criterion scoring against five lead-set rubrics (geographic clustering, hotel-move logistics, named-place specificity, category variety, transit realism):
+
+| | gemini | gpt-oss | sonnet |
+|---|---|---|---|
+| Total /25 | 18 | 20 | 23 |
+
+Sonnet wins by 3 points; the gap is **not from being smarter** but from fewer invented details and more practical add-ons. gpt-oss has more raw content per dollar but lower per-line trust. Gemini is fastest scaffold for human polish.
+
+### Lessons that travel to the next vendor / next workflow
+
+1. **Adapter defaults can mask vendor capability**. The first run of this exact demo had Gemini at 0/25 — silently truncated at the adapter default `max_output_tokens=1024`. Bumping to 8192 turned Gemini from "disqualified" to "credible third" with zero model change. Worth auditing every adapter (`AnthropicAdapter.max_tokens=1024` is the same risk, untriggered so far).
+
+2. **Confident-but-wrong is the dominant failure mode of OSS reasoning models on long-form tasks**. gpt-oss's invented Odaiba routing and outdated teamLab venue both look authoritative until you check them. For routing decisions: send gpt-oss anywhere *structure* matters; fact-check or replace with sonnet anywhere *accuracy* does.
+
+3. **Speed-quality trade-off is real and ordered**. In this task: gemini ~5s @ 18 pts < gpt-oss ~60s @ 20 pts < sonnet ~100s @ 23 pts. The points-per-second sweet spot is gemini (~3 pt/s) — useful for high-volume scaffolding where downstream polish is cheap.
+
+4. **Transient HTTP 5xx needs lead retry, not adapter retry**. The adapter's job is to surface the failure cleanly with the upstream error in `notes`. The decision to retry, abandon, or fall back belongs to the lead — they know the workflow context. The new `POST /retry` route makes the trigger one curl call. A future `retry_on_failure: N` task creation hint would close this loop automatically without a manual nudge.
+
+5. **In-place retry > parallel re-dispatch for graph cleanliness**. Same task id, same node, lifecycle continues. The `↻N` badge is the historical breadcrumb — anyone scrolling the graph later can see "this chain had a transient recoverable failure" without parsing duplicate node titles.
+
+6. **Cascade reset is the natural pair of cascade fail**. `_propagate_failure` walks down on terminal failure; `_reset_cascade_failures` walks down on retry-reset. Once both directions exist, a long broken chain repairs through a single `POST /retry` at the root of the failure.
+
+### Code pointers
+
+- Retry route: [`src/mab/broker/routes/tasks.py`](../src/mab/broker/routes/tasks.py) — `retry_task()` + `_reset_cascade_failures()`
+- DB helper: [`src/mab/broker/db.py`](../src/mab/broker/db.py) — `reset_task_for_retry()`
+- MCP tool: [`src/mab/mcp_server/server.py`](../src/mab/mcp_server/server.py) — `retry_task`
+- Dashboard rendering: [`src/mab/broker/static/index.html`](../src/mab/broker/static/index.html) — `renderTaskGraph()` retry badge + `@keyframes retry-pulse`
+- Tests: [`tests/test_retry.py`](../tests/test_retry.py) — 6 cases (reset / 400 / 404 / counter / blocked-deps / cascade)
+
+---
+
 ## What's NOT in this cookbook (yet)
 
 - **Inline result substitution.** Recipes here gate by `depends_on` but don't auto-inject upstream `result` into downstream `description`. If your downstream prompt needs the upstream result verbatim (e.g. "polish this exact draft"), today you have to dispatch sequentially: create A, wait for A, read result, embed in B's description, create B. The fire-and-forget pattern works for plans where downstream prompts are self-contained, or use Recipe 4's auto-promote pattern with a context handoff doc.

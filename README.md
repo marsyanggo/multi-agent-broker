@@ -55,9 +55,17 @@ Tasks declare **what they need** (`required_all=["tier:reasoning", "host:cloud"]
                             – any HTTP-speaking LLM (one ~50-line adapter)
 ```
 
-One Python daemon (`mab-worker`) per worker host, four built-in adapters (`anthropic` / `ollama` / `claude-cli` / `mock`), swap with one CLI flag — `--adapter X --model Y`. **No client-side change for the lead when you swap vendors.**
+One Python daemon (`mab-worker`) per worker host, five built-in adapters (`anthropic` / `ollama` / `claude-cli` / `gemini` / `mock`), swap with one CLI flag — `--adapter X --model Y`. **No client-side change for the lead when you swap vendors.**
 
-> **Status:** Phase 1 (core) + Phase 1.5 (deployment) + Phase 2.1 (capability routing) + Phase 2.2 (task delete + observability) + Phase 3a Roster + **Phase 3 fully complete** — worker daemon SDK + `depends_on` task chains + shared context + channels. 188 tests, real-subprocess end-to-end demos, one-shot installers for both broker and worker hosts, live cross-machine multi-LLM proof: claude-mac (Opus via Anthropic API) as lead orchestrates worker-gpt-oss-cloud (gpt-oss:120b via Ollama Cloud) running as a headless `mab-worker` systemd daemon — push-driven task routing settles in ~1 second end-to-end (broker push + daemon claim + Ollama inference + result write-back). End-to-end natural-language demo (`/lead-mode` builds a playable Chrome-dino game across two vendor workers in ~5 minutes) verified — see [`docs/cookbook.md`](docs/cookbook.md) Recipe 6 + [`examples/dino.html`](examples/dino.html).
+> **Status:** Phase 1 + 1.5 + 2.1 + 2.2 + 3a + **Phase 3 + Phase 5a fully complete**. 212 tests green.
+>
+> **3 vendor families live in production**: Anthropic Claude (Opus lead + Sonnet worker via Max subscription), OpenAI OSS (gpt-oss:120b via Ollama Cloud), Google (gemini-2.5-flash via AI Studio on a Raspberry Pi) — all routing via capability tags, lead doesn't see vendor names. Cross-vendor `/lead-mode` demos verified end-to-end including a 3-vendor Tokyo itinerary comparison (cookbook Recipe 8) and a playable single-file Chrome-dino game built across two vendors (Recipe 6, [`examples/dino.html`](examples/dino.html)).
+>
+> **Phase 5a — Read-only web dashboard** ships at `/dashboard` on the broker: per-batch task graph (depends_on connected components), live agent state, per-task agent + model + duration metadata, dark "tech" aesthetic with status-lifecycle colours (gray → amber → green/red). Includes the **in-place retry primitive** — failed tasks reset on the same id with cascade reset of downstream failures, dashboard shows a `↻N` badge and pulse animation for visible retry recovery. See [issue #1](https://github.com/marsyanggo/multi-agent-broker/issues/1) for screencast.
+>
+> **Reliability hardening**: supersede-race fix (zombie WS connections no longer flap status), broker-side stuck-task reaper (worker dies mid-task → auto-fail after heartbeat goes stale).
+>
+> **Cookbook**: 8 production-verified recipes in [`docs/cookbook.md`](docs/cookbook.md) — two-stage thinking, fan-in synthesis, failure cascade, shared context, channels, `/lead-mode` end-to-end, adding a third vendor, cross-vendor comparison + retry.
 
 ---
 
@@ -442,8 +450,12 @@ Test layout:
 | `tests/worker/test_anthropic_adapter.py` | AnthropicAdapter against `httpx.MockTransport`: happy path, system prompt + temperature, multi-block concat, non-text-block skip, HTTP error mapping, empty response, missing key |
 | `tests/worker/test_ollama_adapter.py` | OllamaAdapter against `httpx.MockTransport`: local no-auth, cloud bearer, system prompt, response trim, HTTP error, malformed response |
 | `tests/worker/test_claude_cli_adapter.py` | ClaudeCLIAdapter with a temp Python shim mimicking `claude` CLI: version probe, model + flag wiring, prompt template, exit code mapping, empty stdout, subprocess kill on cancel, extra args |
-| `tests/worker/test_cli.py` | `mab-worker` CLI: parse_capabilities, build_adapter for each of 4 adapters, env-var defaults, required-flag validation |
+| `tests/worker/test_cli.py` | `mab-worker` CLI: parse_capabilities, build_adapter for each of 5 adapters, env-var defaults, required-flag validation |
+| `tests/worker/test_gemini_adapter.py` | GeminiAdapter against `httpx.MockTransport`: happy path, system prompt, temperature, multi-part text concat, missing key, env key, HTTP error, SAFETY `finishReason` surfacing, no-candidates |
 | `tests/worker/test_e2e_daemon.py` | End-to-end daemon scenarios: capability-rejected claim, push-after-catchup (true push path), graceful stop mid-task, 10-task burst |
+| `tests/test_dashboard.py` | `/api/v1/dashboard/snapshot` shape: unauth 401, empty shape, populated state after creating task/channel/context |
+| `tests/test_reaper.py` | Stuck-task reaper: stuck + stale agent → failed + current_task cleared; fresh agent skipped; cascade failure through downstream; ignore pending / completed |
+| `tests/test_retry.py` | In-place retry: reset failed → pending + cleared state + retry note; 400 on non-failed; 404 on missing; counter increment across attempts; reset to `blocked` if upstream not completed; cascade reset downstream failures |
 
 ---
 
@@ -458,10 +470,16 @@ Test layout:
 - **Phase 3 (D — depends_on)** ✅ — task dependencies: blocked status + auto-unblock on upstream completion + failure cascade through downstream chains. Lets a lead fire a whole multi-step plan in one go instead of polling between steps.
 - **Phase 3 (S — shared context)** ✅ — pinned named documents any agent can read. Solves "every task description duplicates the same style guide" and supports auto-promoting upstream task results as named handoff docs.
 - **Phase 3 (CH — channels)** ✅ — named group-broadcast topics. Members get WS push for every new message; non-members can still read history via REST but don't receive pushes and can't post. Distinct from direct messages (1:1) and tasks (claim-lifecycle) — for coordination noise, status updates, open queries. 12 new tests (9 REST + 2 WS + 1 MCP).
-- **Phase 3 (cookbook)** ✅ — 6 production-verified cross-vendor recipes in [`docs/cookbook.md`](docs/cookbook.md): two-stage thinking, fan-in synthesis, failure cascade, pinned project spec, group broadcast, **and `/lead-mode` end-to-end** (natural language → fan-out + fan-in plan → playable [`examples/dino.html`](examples/dino.html) artifact, ~5 min wall-clock).
-- Test total: 188.
-- **Phase 4** — TLS + JWT + IP allowlist for public-internet deployment
-- **Phase 5** — Web dashboard + message full-text search
+- **Phase 3 (cookbook)** ✅ — 8 production-verified cross-vendor recipes in [`docs/cookbook.md`](docs/cookbook.md): two-stage thinking, fan-in synthesis, failure cascade, pinned project spec, group broadcast, `/lead-mode` end-to-end ([`examples/dino.html`](examples/dino.html)), adding a third vendor (Google Gemini on RPi), cross-vendor comparison + in-place retry.
+- **Phase 3 (reliability hardening)** ✅ — supersede-race fix (two mab-agents sharing an api-key no longer flap status via WS supersede cycle).
+- **Phase 5 (broker reliability)** ✅ — stuck-task reaper: tasks pinned to `assigned` / `in_progress` whose owner agent goes stale auto-fail with a self-describing note, cascade-fails through downstream `depends_on` chains. Heartbeat-only trigger so long-running LLM calls on healthy workers aren't false-positived.
+- **Phase 5a (read-only web dashboard)** ✅ — vanilla HTML+JS+CSS bundled into the broker at `/dashboard` (single 28 KB file, no build step). Per-batch task graph via `depends_on` connected-component grouping; live agent state with per-task agent + model + duration metadata; dark / cyan-accent aesthetic; status lifecycle gray → amber → green/red.
+- **Phase 5 (adapter resilience)** ✅ — `GeminiAdapter` (Google AI Studio, OpenAI-compatible-ish via httpx-direct, 4th built-in adapter). `max_output_tokens` defaults raised to 8192 after demo11 silently truncated long-form output. **In-place retry** primitive: `POST /api/v1/tasks/{id}/retry` resets a failed task on the same id, cascade-resets downstream failures, dashboard shows `↻N` history badge + 1s pulse animation while retrying.
+- **Phase 5 (worker ops symmetry)** ✅ — `deploy/update-worker.sh` mirrors the broker's `update.sh`: ff-only pull, `uv sync`, restart every `mab-worker*.service` (or filter via `--name`), per-unit online-status verification via `/agents/me`.
+- Test total: **212**.
+- **Phase 4** — TLS + JWT + IP allowlist for public-internet deployment (deferred — LAN deployment works for current use)
+- **Phase 5b** — dashboard write actions (dispatch / claim / delete / send message / **retry button** on red nodes — retry route already lands)
+- **Phase 5c** — full-text search across messages + task descriptions/results + contexts + channel messages (SQLite FTS5)
 
 ---
 
