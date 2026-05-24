@@ -2,7 +2,13 @@
 
 **Make LLMs from different vendors collaborate as one team — by capability, not by name.**
 
-> 🎬 **Latest demo (Phase 5a — dashboard):** see [issue #1](https://github.com/marsyanggo/multi-agent-broker/issues/1) for the screencast — read-only web dashboard, real-time multi-vendor task graph, cross-vendor parallel execution driven from a `/lead-mode` session. Direct video: [Demo_v1.mov](https://github.com/marsyanggo/multi-agent-broker/releases/download/demo-phase-5a-dashboard/Demo_v1.mov).
+## Demo
+
+> **Phase 5a — Read-only web dashboard.** Lead (Claude Opus) dispatches a fan-in DAG from a `/lead-mode` session. Workers from two vendors (gpt-oss:120b on Ollama Cloud + claude-sonnet-4-6 via Anthropic Max) run the chain in parallel. Dashboard polls broker state every 1 s — pre-staged DAG painted gray, sentinel "go" task fires the cascade, status lifecycle gray → amber → green with live per-box duration tick.
+
+https://github.com/user-attachments/assets/5010b21c-df23-4ee2-b35f-8a84db95ea30
+
+> Code: [`src/mab/broker/routes/dashboard.py`](src/mab/broker/routes/dashboard.py) (backend snapshot) + [`src/mab/broker/static/index.html`](src/mab/broker/static/index.html) (single-file vanilla HTML/JS/CSS frontend). Discussion + alt download: [issue #1](https://github.com/marsyanggo/multi-agent-broker/issues/1).
 
 A single-vendor agent stack (Claude Code subagents, OpenAI Assistants, Gemini agents) can already coordinate N copies of *its* model. mab-broker is for the harder problem: **the right LLM for this sub-task lives in another vendor's stack, on your own hardware, or split across both**. Examples this codebase exists to enable:
 
