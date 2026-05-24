@@ -120,12 +120,17 @@
       overflow: hidden;
     }
 
-    #tasks-graph-panel svg {
+    /* Graph svg renders at natural pixel size from JS; the wrapper div
+       inside the panel scrolls if the graph overflows. The h2 stays
+       pinned at top because it's outside this wrapper. */
+    #tasks-graph-scroll {
       flex: 1;
       min-height: 0;
-      display: block;
-      width: 100%;
       overflow: auto;
+      padding: 4px 8px;
+    }
+    #tasks-graph-scroll svg {
+      display: block;
     }
 
     /* ── Grid area assignments ── */
@@ -170,7 +175,9 @@
 
     <section id="tasks-graph-panel" class="panel">
       <h2>Task graph (depends_on)</h2>
-      <svg id="tasks-graph" width="100%" height="300"></svg>
+      <div id="tasks-graph-scroll">
+        <svg id="tasks-graph"></svg>
+      </div>
     </section>
 
     <section id="channels-panel" class="panel">
@@ -578,8 +585,13 @@ function renderTaskGraph(snapshot) {
   const totalWidth = layers.length * (BOX_W + H_GAP) - H_GAP;
   const totalHeight = maxRows * (BOX_H + V_GAP) - V_GAP;
 
-  svg.setAttribute("viewBox", `0 0 ${totalWidth} ${totalHeight}`);
-  svg.setAttribute("preserveAspectRatio", "xMidYMid meet");
+  // Render at natural pixel size — DO NOT use viewBox scaling, otherwise
+  // the panel's 100% width would stretch small boxes to fill it. If the
+  // graph overflows the panel, the parent's overflow:auto lets it scroll.
+  svg.removeAttribute("viewBox");
+  svg.removeAttribute("preserveAspectRatio");
+  svg.setAttribute("width", totalWidth);
+  svg.setAttribute("height", totalHeight);
 
   // Define arrow marker
   const defs = document.createElementNS(SVG_NS, "defs");
