@@ -576,14 +576,15 @@ function renderTaskGraph(snapshot) {
 
   const maxRows = Math.max(...layers.map(l => l.length));
 
-  // Geometry constants
-  const BOX_W = 50;
-  const BOX_H = 12;
-  const H_GAP = 12;
-  const V_GAP = 3;
+  // Geometry constants — top-to-bottom layout. Layers stack vertically,
+  // items within a layer go horizontally.
+  const BOX_W = 200;
+  const BOX_H = 48;
+  const ITEM_GAP = 24;  // horizontal gap between siblings in the same layer
+  const LAYER_GAP = 24; // vertical gap between layers (room for arrowhead)
 
-  const totalWidth = layers.length * (BOX_W + H_GAP) - H_GAP;
-  const totalHeight = maxRows * (BOX_H + V_GAP) - V_GAP;
+  const totalWidth = maxRows * (BOX_W + ITEM_GAP) - ITEM_GAP;
+  const totalHeight = layers.length * (BOX_H + LAYER_GAP) - LAYER_GAP;
 
   // Render at natural pixel size — DO NOT use viewBox scaling, otherwise
   // the panel's 100% width would stretch small boxes to fill it. If the
@@ -633,10 +634,10 @@ function renderTaskGraph(snapshot) {
   const posMap = new Map(); // id -> {x,y}
   // Render boxes & texts
   layers.forEach((layerArr, layerIdx) => {
-    layerArr.forEach((obj, rowIdx) => {
+    layerArr.forEach((obj, colIdx) => {
       const t = obj.task;
-      const x = layerIdx * (BOX_W + H_GAP);
-      const y = rowIdx * (BOX_H + V_GAP);
+      const x = colIdx * (BOX_W + ITEM_GAP);
+      const y = layerIdx * (BOX_H + LAYER_GAP);
       posMap.set(t.id, { x, y });
 
       const { fill, stroke } = styleFor(t.status);
@@ -658,12 +659,12 @@ function renderTaskGraph(snapshot) {
       txt.setAttribute("x", x + BOX_W / 2);
       txt.setAttribute("y", y + BOX_H / 2);
       txt.setAttribute("font-family", "monospace");
-      txt.setAttribute("font-size", "6");
+      txt.setAttribute("font-size", "13");
       txt.setAttribute("fill", "#c9d1d9");
       txt.setAttribute("text-anchor", "middle");
       txt.setAttribute("dominant-baseline", "middle");
       let disp = t.title || "";
-      if (disp.length > 7) disp = disp.slice(0, 7) + "…";
+      if (disp.length > 28) disp = disp.slice(0, 28) + "…";
       txt.textContent = disp;
 
       svg.appendChild(rect);
@@ -681,10 +682,11 @@ function renderTaskGraph(snapshot) {
       const srcPos = posMap.get(did);
       if (!srcPos) return;
       const line = document.createElementNS(SVG_NS, "line");
-      line.setAttribute("x1", srcPos.x + BOX_W);
-      line.setAttribute("y1", srcPos.y + BOX_H / 2);
-      line.setAttribute("x2", targetPos.x);
-      line.setAttribute("y2", targetPos.y + BOX_H / 2);
+      // Top-to-bottom arrows: dep bottom-center → target top-center
+      line.setAttribute("x1", srcPos.x + BOX_W / 2);
+      line.setAttribute("y1", srcPos.y + BOX_H);
+      line.setAttribute("x2", targetPos.x + BOX_W / 2);
+      line.setAttribute("y2", targetPos.y);
       line.setAttribute("stroke", "#8b949e");
       line.setAttribute("stroke-width", "1");
       line.setAttribute("marker-end", "url(#arrow)");
