@@ -746,11 +746,15 @@ function renderTaskGraph(snapshot) {
   defs.appendChild(marker);
   svg.appendChild(defs);
 
-  // Helper to get fill/stroke by status
+  // Helper to get fill/stroke by status.
+  // pending + blocked both render gray ("not yet run") so the graph
+  // upfront shows the full chain in a neutral state; color appears only
+  // when work actually starts (amber active, green done, red failed).
   function styleFor(status) {
     switch (status) {
       case "pending":
-        return { fill: "white", stroke: "#58a6ff" };
+      case "blocked":
+        return { fill: "#21262d", stroke: "#8b949e" };
       case "assigned":
       case "in_progress":
         return { fill: "#2c1e0a", stroke: "#d29922" };
@@ -758,10 +762,8 @@ function renderTaskGraph(snapshot) {
         return { fill: "#0f2818", stroke: "#3fb950" };
       case "failed":
         return { fill: "#2a0f0f", stroke: "#f85149" };
-      case "blocked":
-        return { fill: "#21262d", stroke: "#8b949e" };
       default:
-        return { fill: "#161b22", stroke: "#58a6ff" };
+        return { fill: "#21262d", stroke: "#8b949e" };
     }
   }
 
