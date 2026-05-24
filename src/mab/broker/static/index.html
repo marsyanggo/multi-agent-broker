@@ -543,57 +543,58 @@ function renderTaskGraph(snapshot) {
   const svg = document.getElementById("tasks-graph");
   while (svg.firstChild) svg.removeChild(svg.firstChild);
 
-  const now = Date.now();
-  const ONE_HOUR = 3600 * 1000;
-  const nonTerminal = new Set(["pending", "assigned", "in_progress", "blocked", "failed"]);
-
   // Build id → task map
   const tasksArray = Array.isArray(snapshot) ? snapshot : snapshot.tasks || [];
   const idToTask = new Map();
   for (const t of tasksArray) idToTask.set(t.id, t);
 
-  // Reverse adjacency (who depends on me)
-  const dependents = new Map(); // id -> Set of task ids that depend on it
+  // === Batch detection via depends_on connected components ===
+  // A "batch" is a set of tasks linked through depends_on relationships
+  // (treated as an undirected graph for component finding). Tasks with no
+  // deps and no dependents are singletons (their own batch).
+  //
+  // We show only the MOST RECENT batch — the one whose latest task update
+  // is newest. This means each `/lead-mode` dispatch effectively "clears"
+  // the previous run from the graph the moment a new chain's first task
+  // touches the broker.
+  const parent = new Map();
+  function find(x) {
+    while (parent.get(x) !== x) {
+      parent.set(x, parent.get(parent.get(x))); // path compression
+      x = parent.get(x);
+    }
+    return x;
+  }
+  function union(a, b) {
+    parent.set(find(a), find(b));
+  }
+  for (const t of tasksArray) parent.set(t.id, t.id);
   for (const t of tasksArray) {
-    const deps = t.depends_on || [];
-    for (const d of deps) {
-      if (!dependents.has(d)) dependents.set(d, new Set());
-      dependents.get(d).add(t.id);
+    for (const dep of t.depends_on || []) {
+      if (parent.has(dep)) union(t.id, dep);
     }
   }
 
-  // Initial inclusion: any task updated within the last hour, regardless
-  // of status. Drops the long tail of stale failed/in_progress tasks from
-  // old sessions that used to clog the graph.
-  const included = new Set();
+  // Group by root
+  const components = new Map(); // root -> {tasks: [], latestMs: number}
   for (const t of tasksArray) {
-    const updated = new Date(t.updated_at).getTime();
-    if (now - updated <= ONE_HOUR) included.add(t.id);
-  }
-
-  // Add older completed tasks ONLY if a recently-included task depends on
-  // them — preserves the visible upstream of any active chain.
-  let grew = true;
-  while (grew) {
-    grew = false;
-    for (const id of Array.from(included)) {
-      const t = idToTask.get(id);
-      if (!t) continue;
-      for (const depId of t.depends_on || []) {
-        if (!included.has(depId) && idToTask.has(depId)) {
-          included.add(depId);
-          grew = true;
-        }
-      }
+    const root = find(t.id);
+    if (!components.has(root)) {
+      components.set(root, { tasks: [], latestMs: 0 });
     }
+    const c = components.get(root);
+    c.tasks.push(t);
+    const updated = Date.parse(t.updated_at);
+    if (updated > c.latestMs) c.latestMs = updated;
   }
 
-  // Keep only most‑recent 50 after filtering
-  const filtered = Array.from(included)
-    .map(id => idToTask.get(id))
-    .filter(Boolean)
-    .sort((a, b) => new Date(b.updated_at) - new Date(a.updated_at))
-    .slice(0, 50);
+  // Pick latest component
+  let latest = null;
+  for (const c of components.values()) {
+    if (!latest || c.latestMs > latest.latestMs) latest = c;
+  }
+
+  const filtered = latest ? latest.tasks : [];
   const finalSet = new Set(filtered.map(t => t.id));
 
   if (filtered.length === 0) {
