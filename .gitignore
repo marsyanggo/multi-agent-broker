@@ -26,3 +26,6 @@ build/
 
 # Backups written by deploy/setup-agent.sh before mutating local config
 *.mab-bak
+
+# Demo recordings — uploaded to GitHub releases, not committed to git
+demo/

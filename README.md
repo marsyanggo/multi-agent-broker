@@ -2,6 +2,8 @@
 
 **Make LLMs from different vendors collaborate as one team — by capability, not by name.**
 
+> 🎬 **Latest demo (Phase 5a — dashboard):** see [issue #1](https://github.com/marsyanggo/multi-agent-broker/issues/1) for the screencast — read-only web dashboard, real-time multi-vendor task graph, cross-vendor parallel execution driven from a `/lead-mode` session. Direct video: [Demo_v1.mov](https://github.com/marsyanggo/multi-agent-broker/releases/download/demo-phase-5a-dashboard/Demo_v1.mov).
+
 A single-vendor agent stack (Claude Code subagents, OpenAI Assistants, Gemini agents) can already coordinate N copies of *its* model. mab-broker is for the harder problem: **the right LLM for this sub-task lives in another vendor's stack, on your own hardware, or split across both**. Examples this codebase exists to enable:
 
 - **Claude Opus** plans a workflow, dispatches the heavy reasoning step to **gpt-oss:120b on Ollama Cloud** (1/10 the cost), then routes the polishing pass to **Claude Sonnet via subscription** — all in one autonomous task chain.
