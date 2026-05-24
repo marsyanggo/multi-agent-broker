@@ -283,3 +283,104 @@ async def update_task(
         await _propagate_failure(updated, "failed", db, hub)
 
     return updated
+
+
+@router.post("/{task_id}/retry", response_model=Task)
+async def retry_task(
+    task_id: str,
+    _me: Annotated[Agent, Depends(get_current_agent)],
+    db: Annotated[Database, Depends(get_db)],
+    hub: Annotated[WebSocketHub, Depends(get_hub)],
+) -> Task:
+    """Reset a failed task back to dispatchable (pending/blocked) so a worker
+    can pick it up again. Same task id, lifecycle restarts in place — the
+    dashboard sees red → gray → amber → green on a single node.
+
+    Cascade: any downstream task that was failed with note
+    "upstream dependency <task_id> failed" gets reset to blocked, so when
+    this task succeeds the existing _propagate_completion path naturally
+    unblocks the chain. Lead doesn't have to retry each step manually."""
+    task = await db.get_task(task_id)
+    if task is None:
+        raise HTTPException(status_code=404, detail="task not found")
+    if task.status != "failed":
+        raise HTTPException(
+            status_code=400,
+            detail=f"only failed tasks can be retried (current status: {task.status})",
+        )
+
+    # Count prior retry attempts from notes.
+    prior_attempts = sum(
+        1 for n in (task.notes or []) if n.startswith("retry attempt ")
+    )
+    attempt_n = prior_attempts + 1
+
+    # Was the failure a real error or a cascade?
+    last_error = ""
+    for n in reversed(task.notes or []):
+        if n.startswith("adapter error:") or "timeout" in n or n.startswith("upstream"):
+            last_error = n[:120]
+            break
+
+    # Compute reset status: blocked if any depend is not completed, else pending.
+    new_status: str = "pending"
+    for dep_id in task.depends_on or []:
+        dep = await db.get_task(dep_id)
+        if dep is None or dep.status != "completed":
+            new_status = "blocked"
+            break
+
+    await db.reset_task_for_retry(task_id, new_status)
+
+    note = f"retry attempt {attempt_n}"
+    if last_error:
+        note += f" (after: {last_error})"
+    await db.update_task(task_id, note=note)
+
+    # Clear the previous assignee's current_task pointer if it still
+    # points at this task (worker would otherwise see ghost current_task).
+    if task.assigned_to:
+        prev_agent = await db.get_agent(task.assigned_to)
+        if prev_agent and prev_agent.current_task == task_id:
+            await db.set_current_task(task.assigned_to, None)
+
+    refreshed = await db.get_task(task_id)
+    assert refreshed is not None
+
+    # Cascade reset: any downstream failed-by-this-upstream gets reset to
+    # blocked. They'll auto-unblock via _propagate_completion when this
+    # task succeeds.
+    await _reset_cascade_failures(task_id, db)
+
+    # Emit task_event:created so workers' wait_for_task pops it.
+    # Only broadcast if it's now pending (workers don't pick blocked).
+    if refreshed.status == "pending":
+        extra_targets: list[str] = []
+        if refreshed.assigned_to is None and (refreshed.required_all or refreshed.required_any):
+            matched = await db.find_matching_agents(
+                required_all=refreshed.required_all,
+                required_any=refreshed.required_any,
+                status="online",
+            )
+            extra_targets = [a.id for a in matched]
+        await hub.emit_task_event(
+            "created", refreshed, extra_targets=extra_targets
+        )
+
+    return refreshed
+
+
+async def _reset_cascade_failures(upstream_id: str, db: Database) -> None:
+    """Walk downstream: any task currently `failed` whose notes show it
+    was cascade-failed from `upstream_id` (or any upstream that we just
+    reset) goes back to `blocked`. Recursive — a long failure chain
+    resets all the way down on a single retry call."""
+    all_tasks = await db.list_tasks(status="failed", limit=10_000)
+    expected_note = f"upstream dependency {upstream_id}"
+    for t in all_tasks:
+        if any(expected_note in n for n in (t.notes or [])):
+            await db.reset_task_for_retry(t.id, "blocked")
+            await db.update_task(
+                t.id, note=f"reset to blocked (upstream {upstream_id} retrying)"
+            )
+            await _reset_cascade_failures(t.id, db)

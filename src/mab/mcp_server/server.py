@@ -280,6 +280,23 @@ async def delete_task(task_id: str) -> str:
 
 @mcp.tool()
 @_with_pending
+async def retry_task(task_id: str) -> str:
+    """Retry a failed task in place — same task id, status resets to
+    pending (or blocked if deps unmet). Cascade-resets downstream tasks
+    that were failed by this upstream back to blocked. Adds a
+    "retry attempt N" note. Dashboard shows the box go red → gray →
+    amber → green on the same node.
+
+    Only works on tasks with status="failed"."""
+    try:
+        task = await _client_or_raise().retry_task(task_id)
+    except Exception as e:
+        return _to_json({"error": str(e), "task_id": task_id})
+    return _to_json(task.model_dump(mode="json"))
+
+
+@mcp.tool()
+@_with_pending
 async def create_channel(
     name: str,
     description: str = "",

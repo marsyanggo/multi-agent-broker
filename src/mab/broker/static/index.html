@@ -142,6 +142,17 @@
       margin: 0 auto;
     }
 
+    /* Retry pulse animation for the meta strip — active when a task is
+       in_progress / assigned AND has had at least one retry attempt.
+       Gives the "↻ retrying" text a 1s fade for marquee feel. */
+    @keyframes retry-pulse {
+      0%, 100% { opacity: 0.45; }
+      50%      { opacity: 1; }
+    }
+    #tasks-graph-scroll svg text.retrying-pulse {
+      animation: retry-pulse 1s ease-in-out infinite;
+    }
+
     /* Visible scrollbars on dark theme — macOS auto-hide + low contrast
        made them effectively invisible. Force them on for any scrollable
        panel content. */
@@ -823,33 +834,55 @@ function renderTaskGraph(snapshot) {
       }
 
       // Meta strip — two lines at bottom of box:
-      //   line 1: agent name · duration
-      //   line 2: model (slightly dimmer)
+      //   line 1: agent name · duration   (or  ↻ retrying · duration  when retry is in flight)
+      //   line 2: model                    (or  ↻N  retry counter when not active)
       const { name: aName, model: aModel } = agentMeta(t.assigned_to);
       const dur = taskDuration(t);
-      const metaLine1 = dur ? aName + "  ·  " + dur : aName;
+      const retryCount = (t.notes || []).filter(
+        n => typeof n === "string" && n.startsWith("retry attempt ")
+      ).length;
+      const isActiveRetry =
+        retryCount > 0 &&
+        (t.status === "in_progress" || t.status === "assigned");
+
+      const metaLine1 = isActiveRetry
+        ? "↻ retrying" + (dur ? "  ·  " + dur : "")
+        : (dur ? aName + "  ·  " + dur : aName);
 
       const meta = document.createElementNS(SVG_NS, "text");
       meta.setAttribute("x", x + BOX_W / 2);
       meta.setAttribute("y", y + BOX_H - 18);
       meta.setAttribute("font-family", "monospace");
       meta.setAttribute("font-size", "10");
-      meta.setAttribute("fill", "#8b949e");
+      meta.setAttribute("fill", isActiveRetry ? "#d29922" : "#8b949e");
       meta.setAttribute("text-anchor", "middle");
       meta.setAttribute("dominant-baseline", "middle");
+      if (isActiveRetry) meta.setAttribute("class", "retrying-pulse");
       meta.textContent = metaLine1;
 
       let modelText = null;
-      if (aModel) {
+      // Second meta line: if active retry, show agent + model so user
+      // still knows which worker; otherwise show model on its own line.
+      // If retry already happened (status terminal but retry count > 0),
+      // show "↻N" prefix on the model line as persistent history badge.
+      let line2 = "";
+      if (isActiveRetry) {
+        line2 = aName + (aModel ? "  ·  " + aModel : "");
+      } else if (retryCount > 0) {
+        line2 = "↻" + retryCount + (aModel ? "  ·  " + aModel : "");
+      } else if (aModel) {
+        line2 = aModel;
+      }
+      if (line2) {
         modelText = document.createElementNS(SVG_NS, "text");
         modelText.setAttribute("x", x + BOX_W / 2);
         modelText.setAttribute("y", y + BOX_H - 6);
         modelText.setAttribute("font-family", "monospace");
         modelText.setAttribute("font-size", "9");
-        modelText.setAttribute("fill", "#6e7681");
+        modelText.setAttribute("fill", retryCount > 0 && !isActiveRetry ? "#d29922" : "#6e7681");
         modelText.setAttribute("text-anchor", "middle");
         modelText.setAttribute("dominant-baseline", "middle");
-        modelText.textContent = aModel;
+        modelText.textContent = line2;
       }
 
       // Z-order: rect (background), title, meta, model

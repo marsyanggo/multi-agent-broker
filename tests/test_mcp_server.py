@@ -23,6 +23,7 @@ EXPECTED_TOOLS = {
     "claim_task",
     "update_task",
     "delete_task",
+    "retry_task",
     "list_tasks",
     "wait_for_task",
     "create_context",

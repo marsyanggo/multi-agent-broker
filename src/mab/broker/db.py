@@ -602,6 +602,27 @@ class Database:
         await self.conn.commit()
         return deleted
 
+    async def reset_task_for_retry(
+        self, task_id: str, new_status: TaskStatus
+    ) -> None:
+        """Reset a (typically failed) task back to a dispatchable state:
+        clear result / completed_at / assigned_to, set status. Caller is
+        responsible for adding the retry note via update_task() and for
+        re-emitting task_event:created if appropriate."""
+        await self.conn.execute(
+            """
+            UPDATE tasks
+            SET status = ?,
+                result = NULL,
+                completed_at = NULL,
+                assigned_to = NULL,
+                updated_at = ?
+            WHERE id = ?
+            """,
+            (new_status, _iso(utc_now()), task_id),
+        )
+        await self.conn.commit()
+
     async def find_blocked_downstream(self, task_id: str) -> list[Task]:
         """Find tasks whose `depends_on` contains `task_id` and whose status
         is currently `blocked`. Used by the broker to cascade unblock / fail

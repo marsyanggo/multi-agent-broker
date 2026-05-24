@@ -373,6 +373,11 @@ class BrokerClient:
         r = await self._http.delete(f"/api/v1/tasks/{task_id}")
         r.raise_for_status()
 
+    async def retry_task(self, task_id: str) -> Task:
+        r = await self._http.post(f"/api/v1/tasks/{task_id}/retry")
+        r.raise_for_status()
+        return Task.model_validate(r.json())
+
     # --- Contexts ---
 
     async def create_context(
