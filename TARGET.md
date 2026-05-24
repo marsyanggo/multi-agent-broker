@@ -290,6 +290,7 @@ Lead 派完 3 個 task 就 done — broker 串行 gate、自動 cap routing、�
 - [x] Recipe 4 — Shared context (pin spec / 上游 result auto-promote handoff)
 - [x] Recipe 5 — Channels (group broadcast for coordination noise / open queries)
 - [x] Recipe 6 — `/lead-mode` 端到端（natural language → fan-out + fan-in dino game demo, 4 tasks, ~5 min end-to-end, examples/dino.html artifact）
+- [x] Recipe 7 — Adding a third vendor (Google Gemini worker on RPi) — adapter ~110 行 + CLI flag + capability derivation + setup-worker.sh，第 3 個 vendor 上線 capability filter 自動 routing。包含「gen-key 用 default DB vs broker MAB_DB_PATH 不一致」+ Gemini 429 billing 在 adapter 端 graceful fail 的 production lessons
 - [x] 跑通 `/lead-mode` 端到端真實 demo（4-task 跨 vendor fan-in chain，B+C parallel ~25s，全鏈 ~5 min wall-clock）
 - [x] 產出 `examples/dino.html` 可玩 artifact（gpt-oss IIFE + claude-sonnet HTML shell splice via `// GAME_LOGIC_HERE` placeholder，221 lines single-file，browser-verified）
 - [x] README status header + roadmap 更新（Phase 3 fully complete 改寫，移除 "remaining" bullet）

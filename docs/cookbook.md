@@ -10,6 +10,7 @@ The setup these recipes assume:
 | Broker | Linux box (e.g. 192.168.1.212) | `mab-broker.service` (systemd) | n/a |
 | Worker A | same Linux box | `mab-worker.service` daemon | **gpt-oss:120b-cloud** via Ollama Cloud (OpenAI OSS family) |
 | Worker B | same Linux box | `mab-worker-claude-sonnet.service` daemon | **claude-sonnet-4-6** via `claude -p` (Anthropic Max subscription) |
+| Worker C | Raspberry Pi on the LAN | `mab-worker-gemini.service` daemon | **gemini-2.5-flash** via Google AI Studio (Google family) — added per Recipe 7 |
 
 If you don't have this exactly, the recipes still illustrate the *pattern* — swap `tier:reasoning` for whatever local model you have, etc.
 
@@ -508,6 +509,139 @@ Recipe 6 is the first recipe where the lead is **also a worker** in its own plan
 7. Open the produced artifact (path is in D's `result`).
 
 The `/lead-mode` skill itself lives at `.claude/skills/lead-mode/SKILL.md`. It's prompt-only — no executable code beyond what the LLM does with the MCP tools.
+
+---
+
+## Recipe 7 — Adding a third vendor (Google Gemini worker on Raspberry Pi)
+
+**Story:** the broker already has two worker daemons (Anthropic Claude via `claude-cli`, OpenAI OSS via `ollama`). Adding Google as a third vendor turns "cross-vendor" from "two big LLM camps" into "the actual three major ecosystems each holding a slot on a single task chain". This recipe walks through what you change in the code, what you change on the broker, and what you change on the new worker host — from clean repo to "online" status in ~5 minutes once you have credentials.
+
+The change set is small enough to be a one-PR pattern for any new vendor. Recap of what an adapter actually is: ~110 lines of `httpx` calls in a class with three methods (`setup` / `run_task` / `teardown`). No SDK. No new external dependency.
+
+**Topology:** worker pool now has three vendors. The lead's prompt doesn't change — capability tags carry the routing.
+
+```
+   Lead (claude-mac, Opus)
+        │ create_task(required_all=[...])
+        ▼
+   ┌──────────────────────────────────────────────────────────┐
+   │                       Broker                              │
+   │  Capability filter:                                       │
+   │    tier:opus / family:claude       → claude-mac (lead)    │
+   │    tier:reasoning / family:gpt-oss → worker-gpt-oss-cloud │
+   │    tier:sonnet / family:claude     → worker-claude-sonnet │
+   │    family:google / tier:flash      → worker-gemini-rpi    │  ← new
+   └──────┬───────────────────┬────────────────────┬───────────┘
+          │                   │                    │
+          ▼                   ▼                    ▼
+   ┌──────────────┐   ┌────────────────┐   ┌────────────────┐
+   │  Anthropic   │   │  Ollama Cloud  │   │  Google AI     │
+   │  Max sub     │   │  gpt-oss:120b  │   │  Studio        │
+   │  via claude  │   │                │   │  gemini-2.5-…  │
+   │   -cli       │   │                │   │                │
+   └──────────────┘   └────────────────┘   └────────────────┘
+```
+
+### The change set (verified 2026-05-24)
+
+What landed:
+
+| Where | What | Size |
+|---|---|---|
+| `src/mab/worker/adapters/gemini.py` | New `GeminiAdapter` — httpx POST `/v1beta/models/{model}:generateContent`, `x-goog-api-key` header auth, multi-part text concat, `finishReason` surfaced on empty response | ~110 lines |
+| `src/mab/worker/cli.py` | `ADAPTER_CHOICES` gains `gemini`; new `--gemini-api-key` / `--gemini-base-url` / `--gemini-max-output-tokens` / `--gemini-temperature` flag group; `--system-prompt` now applies | ~30 lines |
+| `src/mab/shared/capabilities.py` | Map for `gemini-2.5-pro/flash/flash-lite`, `gemini-2.0-flash/flash-lite/flash-thinking`, `gemini-1.5-pro/flash`, plus bare `gemini` fallback | ~10 lines |
+| `deploy/setup-worker.sh` | `--gemini-api-key` flag, validation, systemd `Environment=` lines | ~20 lines |
+| `tests/worker/test_gemini_adapter.py` | 9 unit tests with `httpx.MockTransport` (happy path, system prompt, temperature, multi-part, missing key, env-var key, HTTP error, empty `finishReason=SAFETY`, no-candidates) | new |
+| `tests/worker/test_cli.py` | 1 build-adapter test with full Gemini flag set | +20 lines |
+
+Test count went 196 → 206. Zero new dependencies (`httpx` was already in the tree).
+
+### Bringing the third host online
+
+```bash
+# 1. On the broker host — generate an api key for the new worker.
+#    MAB_DB_PATH must match what the broker's systemd unit uses;
+#    naked gen-key writes to the default ~/.multi-agent-broker/db.sqlite
+#    which usually isn't where the production broker reads from.
+ssh BROKER_HOST 'cd ~/multi-agent-broker \
+    && MAB_DB_PATH=<broker db path> .venv/bin/mab-broker gen-key \
+        --name worker-gemini-rpi'
+# → outputs: API key: mab-ak-XXXXXXXXXXXXXXXX
+
+# 2. On the new worker host (Raspberry Pi, in this example):
+git clone https://github.com/<you>/multi-agent-broker.git ~/multi-agent-broker
+cd ~/multi-agent-broker
+
+export GEMINI_API_KEY=<your google ai studio key>
+./deploy/setup-worker.sh \
+    --broker-url http://BROKER_HOST:8420 \
+    --api-key   mab-ak-XXXX_from_step_1 \
+    --adapter   gemini \
+    --model     gemini-2.5-flash \
+    --gemini-api-key "$GEMINI_API_KEY" \
+    --name      gemini
+```
+
+`setup-worker.sh` auto-installs `uv`, runs `uv sync`, probes broker `/health`, verifies the api-key against `GET /agents/me` (this catches DB-mismatch bugs), writes a systemd `--user` unit at `~/.config/systemd/user/mab-worker-gemini.service` (chmod 600, secrets in `Environment=` not `ExecStart`), enables linger, starts the service, and polls `/agents/me` until `status=online`.
+
+Smoke check from the broker side:
+
+```bash
+curl -s -H "Authorization: Bearer <any valid mab-ak>" \
+    http://BROKER_HOST:8420/api/v1/agents \
+    | jq '.[] | select(.name=="worker-gemini-rpi") | {status, capabilities, last_heartbeat_age_seconds}'
+```
+
+Expected:
+
+```json
+{
+  "status": "online",
+  "capabilities": [
+    "model:gemini-2.5-flash",
+    "family:google",
+    "tier:flash",
+    "provider:google"
+  ],
+  "last_heartbeat_age_seconds": 7.1
+}
+```
+
+Capability tags were derived automatically from `--model gemini-2.5-flash` — no manual capability list needed. From this point on, **any task with `required_all=["family:google"]` (or `tier:flash`, or `provider:google`) gets routed to this worker via the broker's existing capability filter** — no lead-side prompt change at all.
+
+### Verifying the routing path (without burning API credits)
+
+```bash
+curl -sS -X POST -H "Authorization: Bearer mab-ak-XXXX" \
+    -H "Content-Type: application/json" \
+    -d '{"title": "gemini probe", "description": "Reply with exactly: gemini ok",
+         "required_all": ["family:google"]}' \
+    http://BROKER_HOST:8420/api/v1/tasks
+```
+
+The broker should:
+1. Filter `match_agents(required_all=["family:google"])` → returns only `worker-gemini-rpi`.
+2. Emit `task_event:created` on the WS queue of that worker only.
+3. Worker daemon's `wait_for_task` returns the task within ~100 ms; daemon claims it.
+
+The Gemini API call itself depends on your billing situation. In this build's first probe the API returned `HTTP 429: prepayment credits are depleted` — entirely a Google AI Studio billing issue, not an adapter or routing bug. The adapter caught the response cleanly and the task ended up with:
+
+```
+status: failed
+notes:  ["picked up by worker daemon (gemini)",
+         "adapter error: Gemini API HTTP 429: {\n  \"error\": {\n    \"code\": 429,
+          \n    \"message\": \"Your prepayment credits are depleted...\""]
+```
+
+That's the graceful-failure path doing its job — capability routing and adapter HTTP plumbing both verified end-to-end; the lead can see exactly what blew up from the task notes. Once Gemini billing is sorted (or you swap to a free-tier project / `gemini-2.5-flash-lite`), the same probe completes with a real response and any of Recipes 1–6 works unchanged with Google in the mix.
+
+### Lessons that travel to the next vendor
+
+- **gen-key needs the broker's `MAB_DB_PATH`**. Naked `mab-broker gen-key` writes to the default DB; the broker's systemd unit usually points elsewhere. The setup script's `/agents/me` 401 probe catches this mismatch immediately — don't skip that probe in your own deploy tooling.
+- **Capability auto-derivation does the work** if you keep `capabilities.py` up to date. A single line like `"gemini-2.5-flash": ("google", "flash")` propagates into `family:google`, `tier:flash`, `provider:google` tags on every worker started with `--model gemini-2.5-flash`. No need to maintain a parallel "this worker supports these tags" config per agent.
+- **The adapter's no-text-response branch must surface the API's reason**. Gemini returns `finishReason: "SAFETY"` (or `"MAX_TOKENS"`, `"RECITATION"`) when there's no usable output. Bake the reason into the error so the lead can tell "model refused" apart from "we configured it wrong".
+- **systemd `Environment=` keeps secrets out of `ps`**. Both the broker api-key and the Gemini api-key live in the unit file's `Environment=` lines, never in `ExecStart`. The unit file is chmod 600. `ps auxww` shows only `mab-worker --broker-url ... --api-key REDACTED-in-env`. Roll the same pattern for any vendor with a key.
 
 ---
 
