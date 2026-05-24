@@ -136,6 +136,10 @@
     }
     #tasks-graph-scroll svg {
       display: block;
+      /* If the SVG is narrower than the wrapper, center it. When the SVG
+         is wider it sits at left edge and the wrapper scrolls (margin
+         auto resolves to 0 in that case). */
+      margin: 0 auto;
     }
 
     /* Visible scrollbars on dark theme — macOS auto-hide + low contrast
@@ -295,7 +299,10 @@ function renderAgentsPanel(snapshot) {
 
 // === 5a-5 tasks panel ===
 
-let currentFilter = 'all';
+// Default to "ongoing" (anything not yet terminal) so the panel shows
+// what's actively happening, not a long history of completed work.
+let currentFilter = 'ongoing';
+const ONGOING_STATUSES = new Set(['pending', 'blocked', 'assigned', 'in_progress']);
 const expandedTasks = new Set();
 let _tasks = [];
 
@@ -308,7 +315,7 @@ const _STATUS_COLORS = {
   blocked: '#8b949e',
 };
 
-const _FILTER_ORDER = ['all', 'pending', 'blocked', 'in_progress', 'completed', 'failed'];
+const _FILTER_ORDER = ['ongoing', 'pending', 'blocked', 'in_progress', 'completed', 'failed', 'all'];
 
 function _applyBtnStyle(btn, active) {
   btn.style.background = active ? '#1f6feb' : '#161b22';
@@ -396,7 +403,9 @@ function _renderList(tasks) {
 
   const filtered = currentFilter === 'all'
     ? tasks.slice()
-    : tasks.filter(t => t.status === currentFilter);
+    : currentFilter === 'ongoing'
+      ? tasks.filter(t => ONGOING_STATUSES.has(t.status))
+      : tasks.filter(t => t.status === currentFilter);
 
   if (filtered.length === 0) {
     const msg = document.createElement('div');
@@ -474,11 +483,24 @@ function renderTasksPanel(snapshot) {
     statusCounts[t.status] = (statusCounts[t.status] || 0) + 1;
   });
 
+  const ongoingCount = _tasks.filter(t => ONGOING_STATUSES.has(t.status)).length;
+
   _FILTER_ORDER.forEach(status => {
     const btn = document.createElement('button');
     btn.dataset.filterStatus = status;
-    const count = status === 'all' ? _tasks.length : (statusCounts[status] || 0);
-    btn.textContent = (status === 'all' ? 'All' : status) + ' (' + count + ')';
+    let count;
+    let label;
+    if (status === 'all') {
+      count = _tasks.length;
+      label = 'All';
+    } else if (status === 'ongoing') {
+      count = ongoingCount;
+      label = 'ongoing';
+    } else {
+      count = statusCounts[status] || 0;
+      label = status;
+    }
+    btn.textContent = label + ' (' + count + ')';
     btn.style.cssText = 'padding:4px 10px;margin-right:4px;cursor:pointer;font-size:12px;border-radius:3px;';
     _applyBtnStyle(btn, currentFilter === status);
 
