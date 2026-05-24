@@ -411,13 +411,63 @@ Lead 派完 3 個 task 就 done — broker 串行 gate、自動 cap routing、�
       _owner: worker-gpt-oss-cloud (reasoning) | elapsed: 20s | broker task `9b2e70b4`_
 - [x] **5a-7.** Frontend: channels + contexts side panels — `renderChannelsPanel` + `renderContextsPanel` + relative-time helper，contexts 可點開 preview
       _owner: worker-claude-sonnet (sonnet) | elapsed: 67s | broker task `d53a4256` | quirk: 同 5a-4 markdown fence，strip 掉_
-- [ ] **5a-8.** Integration: 拼接 5a-3 HTML shell + 5a-4/5/6/7 JS modules + driver (api-key prompt + 1s poll loop)，strip fence quirk，寫到 `src/mab/broker/static/index.html` (27818 chars)；local broker port 8421 smoke test：`/dashboard/` HTTP 200、`/api/v1/dashboard/snapshot` HTTP 401 (auth working)；**剩**：212 broker upgrade + browser 真實驗證
-      _owner: claude-mac (opus) | elapsed: ~15m so far_
+- [x] **5a-8.** Integration: 拼接 5a-3 HTML shell + 5a-4/5/6/7 JS modules + driver (api-key prompt + 1s poll loop)，strip fence quirk，寫到 `src/mab/broker/static/index.html`，212 deployed via `update.sh`，browser 驗證 live updates 端到端 OK
+      _owner: claude-mac (opus) | elapsed: ~15m baseline + multiple visual polish rounds_
+- [x] **5a-9.** Visual polish — 多輪 user feedback iteration: layout swap (tasks ↔ agents)、dark/tech theme (dark slate base + cyan accents)、top-to-bottom graph layout、graph box sizes (4 rounds 120→88→66→50→200)、layer horizontal centering、`min-width:0` flex fix for horizontal scroll、visible WebKit scrollbar、2-line title word-wrap、SVG natural-pixel rendering (no viewBox stretch)
+      _owner: claude-mac (opus) | elapsed: ~1.5h across iterations_
+- [x] **5a-10.** Batch grouping — graph 只顯示最新 connected component (via depends_on union-find)，新 dispatch 自動取代舊 batch；解「所有歷史 task 堆在一張圖」的問題
+      _owner: claude-mac (opus) | elapsed: ~10m_
+- [x] **5a-11.** Per-box meta strip — 每個 graph box 加 agent name (`worker-claude-sonnet`) + model (`claude-sonnet-4-6`) + live duration；duration 在 in_progress 狀態每秒 tick；BOX_H 48 → 64 給 meta 空間
+      _owner: claude-mac (opus) | elapsed: ~10m + 1 iteration after user wanted "agent name+model" not just tier label_
+- [x] **5a-12.** Pending → gray render — 「未跑的」(pending + blocked) 都灰色；color 只在開始跑時上 (gray → amber → green/red 三步生命週期)，配合 sentinel pattern 視覺乾淨
+      _owner: claude-mac (opus) | elapsed: ~5m_
+- [x] **5a-13.** Sentinel hold pattern — lead 端 trick：把 sentinel task 派給自己 + 整個 chain `depends_on=[sentinel]`，所有 node 都 blocked (灰) 一次畫好；user 說 go → lead complete sentinel → cascade unblock 真開跑。無 broker change，純 lead workflow 補位（broker 沒「draft」status，將來如果加 task pause/release 可廢除這個 hack）
+      _owner: claude-mac (opus) | elapsed: ~5m_
+- [x] **5a-14.** UX cleanup — `ongoing` → `active` filter rename (跟 `in_progress` status 重名混淆)；清掉 20h orphan "Push-driven probe" task (in_progress 卡住，舊 worker-mode session 寫 result="pong" 沒 mark completed 就掛)
+      _owner: claude-mac (opus) | elapsed: ~5m_
+- [x] **5a-15.** Demo screencast → GitHub release + issue + README — `demo-phase-5a-dashboard` release with `Demo_v1.mov` (988KB) 當 asset；`/issues/1` 嵌入 video + 對應 code path 解說；README 加 demo link；`demo/` 加 `.gitignore` 不入 git
+      _owner: claude-mac (opus) | elapsed: ~10m_
+- [x] **5a-16.** README inline-player upgrade — release asset URL 點下去是 download；改用 GitHub `user-attachments/assets/<uuid>` URL pattern（syncbench 同款）獨立一行擺著，自動 render 成 `<video>` player 點下去就播。User drag-drop video 到 issue#1 comment 取得 URL，README 加 `## Demo` section 收口
+      _owner: claude-mac (opus) | elapsed: ~10m_
 
 ### 後續 increments（placeholder）
 
 - **Phase 5b — Write actions** — dispatch task / claim / delete / send message / post channel msg 從 UI 操作
 - **Phase 5c — Full-text search** — SQLite FTS5 index over messages + task descriptions/results + channel messages + contexts，dashboard 加 search bar
+
+---
+
+## Phase 5 — Broker reliability: worker-timeout reaper
+
+### 背景
+
+5a-14 暴露的問題：worker daemon 死了或失聯，broker 上的 task 永遠卡 `in_progress`/`assigned`。手動 delete 解決一次，但根因沒處理。`dashboard` active filter 越用越多 stuck task 累積；downstream `depends_on` chain 卡死沒人通知。
+
+### 決策（已鎖定）
+
+| 項目 | 決定 |
+|------|------|
+| 觸發條件 | task 在 `assigned`/`in_progress`，且 assignee 的 `last_heartbeat` 老於 stale threshold (default `heartbeat_interval × 3` = 90s) |
+| 處理動作 | mark task `failed` + note "worker timeout: agent X stale Ys" + clear agent.current_task + emit task_event:failed + cascade failure 到 blocked downstream（重用既有 `_propagate_failure`） |
+| Scan 頻率 | 預設每 60s 一輪（`MAB_TASK_REAP_INTERVAL_SECONDS`），跑在 broker app lifespan background task |
+| Heartbeat-only rule | 不另外 check task age — agent fresh 但 task 久未 update 表示 worker 還活、可能在跑長 LLM call，不該被打死。Worker 端自己的 `asyncio.wait_for` 處理單 task timeout |
+| Retry vs fail | 直接 `failed`，不 reset 成 `pending`。Lead 視情況手動 re-dispatch。Auto-retry 留到未來 |
+
+### Sub-tasks (R)
+
+- [x] **R1.** `src/mab/broker/reaper.py` — `reap_stuck_tasks()` 單次掃 + `reaper_loop()` 永動，loop 從 `app.py` lifespan 啟動
+      _owner: claude-mac (opus) | elapsed: ~15m_
+- [x] **R2.** Config: `task_reap_interval_seconds=60`, `task_reap_stale_multiplier=3` 加 `Settings`，可 `MAB_*` env 覆寫
+      _owner: claude-mac (opus) | elapsed: ~2m_
+- [x] **R3.** Tests — 4 個（stuck → failed / fresh agent → skip / cascade failure / ignore pending+completed），196 tests 全綠
+      _owner: claude-mac (opus) | elapsed: ~10m_
+
+### 之後可加
+
+- 區分「worker timeout failure」跟「真實 task failure」的 metadata（讓 lead 知道值得 retry）
+- Auto-retry mode：reaped task 不直接 failed，先嘗試 `pending` re-dispatch N 次
+- Worker-side graceful shutdown hook：daemon 收 SIGTERM 時把 in-flight task `pending` 還回去而不是 fail
+- Configurable per-task timeout override（some tasks expected to be very long）
 
 ---
 

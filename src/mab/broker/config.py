@@ -13,6 +13,12 @@ class Settings(BaseSettings):
     db_path: Path = Path.home() / ".multi-agent-broker" / "db.sqlite"
     message_ttl_days: int = 7
     heartbeat_interval_seconds: int = 30
+    # Stuck-task reaper: how often to scan, and how long an assignee's
+    # heartbeat can be silent before its in-flight tasks are considered
+    # orphaned. The threshold defaults to 3x heartbeat_interval (matches
+    # the AgentSnapshot.is_stale rule).
+    task_reap_interval_seconds: int = 60
+    task_reap_stale_multiplier: int = 3
 
 
 settings = Settings()

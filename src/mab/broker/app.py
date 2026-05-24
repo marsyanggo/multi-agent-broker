@@ -11,6 +11,7 @@ from fastapi.staticfiles import StaticFiles
 
 from mab.broker.config import settings
 from mab.broker.db import Database
+from mab.broker.reaper import reaper_loop
 from mab.broker.routes import agents, channels, contexts, dashboard, messages, tasks
 from mab.broker.websocket import WebSocketHub, router as ws_router
 
@@ -42,14 +43,16 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     app.state.hub = WebSocketHub(db)
 
     cleanup_task = asyncio.create_task(_ttl_cleanup_loop(db))
+    reaper_task = asyncio.create_task(reaper_loop(db, app.state.hub))
     try:
         yield
     finally:
-        cleanup_task.cancel()
-        try:
-            await cleanup_task
-        except asyncio.CancelledError:
-            pass
+        for task in (cleanup_task, reaper_task):
+            task.cancel()
+            try:
+                await task
+            except asyncio.CancelledError:
+                pass
         await db.close()
 
 
