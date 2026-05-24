@@ -4,11 +4,17 @@
 
 ## Demo
 
-> **Phase 5a — Read-only web dashboard.** Lead (Claude Opus) dispatches a fan-in DAG from a `/lead-mode` session. Workers from two vendors (gpt-oss:120b on Ollama Cloud + claude-sonnet-4-6 via Anthropic Max) run the chain in parallel. Dashboard polls broker state every 1 s — pre-staged DAG painted gray, sentinel "go" task fires the cascade, status lifecycle gray → amber → green with live per-box duration tick.
+![mab-broker dashboard — 4-vendor task graph live](docs/images/dashboard-4vendor.png)
+
+> **Phase 5a — Read-only web dashboard, 4-vendor task graph.** Screenshot above is the lead-mode dashboard at the end of a 7-task fan-out + fan-in plan running across four different LLM vendors simultaneously: **claude-sonnet-4-6** (Anthropic Max subscription via `claude-cli`), **gpt-oss:120b** (Ollama Cloud), **gemini-2.5-flash** (Google AI Studio API), and **gpt-5.5** (ChatGPT subscription via Codex CLI). Each box shows the worker, the model, and the wall-clock duration; the same prompt was sent to all four vendor branches so the lead could compare their outputs side-by-side.
+>
+> Top panel: 6 online agents (5 workers + lead). Bottom panel: the depends_on task graph — sentinel "go" task at the top, four vendor plans in parallel below it, gpt-oss/sonnet/gemini/codex all green, comparison task at the bottom synthesising them. The dashboard polls broker state every 1 s; live status lifecycle is gray (pending/blocked) → amber (in_progress) → green (completed) / red (failed). Per-batch grouping via depends_on connected components means each `/lead-mode` dispatch is its own clean graph — previous runs auto-clear.
+
+> 🎬 **Screencast of the same lifecycle in motion** (sentinel release → vendors light up amber → duration ticking → green): [issue #1](https://github.com/marsyanggo/multi-agent-broker/issues/1) or directly:
 
 https://github.com/user-attachments/assets/5010b21c-df23-4ee2-b35f-8a84db95ea30
 
-> Code: [`src/mab/broker/routes/dashboard.py`](src/mab/broker/routes/dashboard.py) (backend snapshot) + [`src/mab/broker/static/index.html`](src/mab/broker/static/index.html) (single-file vanilla HTML/JS/CSS frontend). Discussion + alt download: [issue #1](https://github.com/marsyanggo/multi-agent-broker/issues/1).
+> Code: [`src/mab/broker/routes/dashboard.py`](src/mab/broker/routes/dashboard.py) (backend snapshot endpoint) + [`src/mab/broker/static/index.html`](src/mab/broker/static/index.html) (single-file vanilla HTML/JS/CSS frontend, no build step). Cross-vendor walkthrough: [`docs/cookbook.md`](docs/cookbook.md) Recipe 8.
 
 A single-vendor agent stack (Claude Code subagents, OpenAI Assistants, Gemini agents) can already coordinate N copies of *its* model. mab-broker is for the harder problem: **the right LLM for this sub-task lives in another vendor's stack, on your own hardware, or split across both**. Examples this codebase exists to enable:
 
