@@ -69,7 +69,7 @@ async def test_gemini_happy_path() -> None:
     assert captured["body"]["contents"] == [
         {"role": "user", "parts": [{"text": "question?"}]}
     ]
-    assert captured["body"]["generationConfig"]["maxOutputTokens"] == 1024
+    assert captured["body"]["generationConfig"]["maxOutputTokens"] == 8192
 
 
 async def test_gemini_includes_system_prompt() -> None:

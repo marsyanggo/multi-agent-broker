@@ -120,7 +120,7 @@ def build_parser() -> argparse.ArgumentParser:
         ),
         help="Gemini API base URL (default Google AI Studio)",
     )
-    g.add_argument("--gemini-max-output-tokens", type=int, default=1024)
+    g.add_argument("--gemini-max-output-tokens", type=int, default=8192)
     g.add_argument("--gemini-temperature", type=float, default=None)
 
     # --- Ollama adapter ---

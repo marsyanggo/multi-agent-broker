@@ -31,7 +31,12 @@ class GeminiAdapter(LLMAdapter):
         model: str,
         api_key: str | None = None,
         base_url: str = "https://generativelanguage.googleapis.com",
-        max_output_tokens: int = 1024,
+        # Default raised from 1024 to 8192 after demo11 (3-vendor Tokyo
+        # itinerary comparison): the prior cap silently truncated
+        # long-form outputs mid-sentence with no error. 8192 is well
+        # under the Gemini 2.5 Flash output-token ceiling (~65K) and
+        # comfortably fits 7-day itineraries, multi-page essays, etc.
+        max_output_tokens: int = 8192,
         temperature: float | None = None,
         system_prompt: str | None = None,
         timeout: float = 300.0,
