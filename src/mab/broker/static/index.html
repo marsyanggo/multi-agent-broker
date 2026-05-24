@@ -566,10 +566,46 @@ function renderTaskGraph(snapshot) {
   const svg = document.getElementById("tasks-graph");
   while (svg.firstChild) svg.removeChild(svg.firstChild);
 
-  // Build id → task map
+  // Build id → task map + id → agent map (for the per-box meta strip)
   const tasksArray = Array.isArray(snapshot) ? snapshot : snapshot.tasks || [];
   const idToTask = new Map();
   for (const t of tasksArray) idToTask.set(t.id, t);
+  const agentsArray = (snapshot && snapshot.agents) || [];
+  const idToAgent = new Map();
+  for (const a of agentsArray) idToAgent.set(a.id, a);
+
+  function agentLabel(agentId) {
+    if (!agentId) return "—";
+    const a = idToAgent.get(agentId);
+    if (!a) return agentId.slice(0, 8);
+    for (const cap of a.capabilities || []) {
+      if (cap.startsWith("tier:")) return cap.slice(5);
+    }
+    for (const cap of a.capabilities || []) {
+      if (cap.startsWith("model:")) return cap.slice(6);
+    }
+    return a.name || agentId.slice(0, 8);
+  }
+
+  function formatDuration(ms) {
+    const s = Math.max(0, Math.round(ms / 1000));
+    if (s < 60) return s + "s";
+    const m = Math.floor(s / 60);
+    const r = s % 60;
+    if (m < 60) return r ? m + "m" + r + "s" : m + "m";
+    const h = Math.floor(m / 60);
+    return h + "h" + (m % 60) + "m";
+  }
+
+  const nowMs = Date.now();
+  function taskDuration(t) {
+    const created = Date.parse(t.created_at);
+    if (t.completed_at) return formatDuration(Date.parse(t.completed_at) - created);
+    if (t.status === "in_progress" || t.status === "assigned") {
+      return formatDuration(nowMs - created);
+    }
+    return ""; // pending / blocked — no meaningful duration yet
+  }
 
   // === Batch detection via depends_on connected components ===
   // A "batch" is a set of tasks linked through depends_on relationships
@@ -679,9 +715,9 @@ function renderTaskGraph(snapshot) {
   // Geometry constants — top-to-bottom layout. Layers stack vertically,
   // items within a layer go horizontally.
   const BOX_W = 200;
-  const BOX_H = 48;
+  const BOX_H = 64;     // taller to fit title (2 lines) + meta strip (agent · duration)
   const ITEM_GAP = 24;  // horizontal gap between siblings in the same layer
-  const LAYER_GAP = 24; // vertical gap between layers (room for arrowhead)
+  const LAYER_GAP = 28; // vertical gap between layers (room for arrowhead)
 
   const totalWidth = maxRows * (BOX_W + ITEM_GAP) - ITEM_GAP;
   const totalHeight = layers.length * (BOX_H + LAYER_GAP) - LAYER_GAP;
@@ -762,9 +798,12 @@ function renderTaskGraph(snapshot) {
 
       // Word-wrap the title into up to 2 lines that fit within the box.
       // For BOX_W=200 and font 13px monospace, ~24 chars fit per line.
+      // Title takes the upper area; meta strip (agent · duration) takes
+      // the bottom 16px.
       const lines = wrapTitle(t.title || "", 24, 2);
       const lineHeight = 15;
-      const startY = y + BOX_H / 2 - (lines.length - 1) * lineHeight / 2;
+      const titleCenterY = y + 22;
+      const startY = titleCenterY - (lines.length - 1) * lineHeight / 2;
 
       const txt = document.createElementNS(SVG_NS, "text");
       txt.setAttribute("x", x + BOX_W / 2);
@@ -782,8 +821,23 @@ function renderTaskGraph(snapshot) {
         txt.appendChild(tspan);
       }
 
+      // Meta strip — agent label · duration, bottom of box, smaller font.
+      const aLabel = agentLabel(t.assigned_to);
+      const dur = taskDuration(t);
+      const metaText = dur ? aLabel + "  ·  " + dur : aLabel;
+      const meta = document.createElementNS(SVG_NS, "text");
+      meta.setAttribute("x", x + BOX_W / 2);
+      meta.setAttribute("y", y + BOX_H - 8);
+      meta.setAttribute("font-family", "monospace");
+      meta.setAttribute("font-size", "10");
+      meta.setAttribute("fill", "#7d8590");
+      meta.setAttribute("text-anchor", "middle");
+      meta.setAttribute("dominant-baseline", "middle");
+      meta.textContent = metaText;
+
       svg.appendChild(rect);
       svg.appendChild(txt);
+      svg.appendChild(meta);
     });
   });
 
