@@ -138,6 +138,32 @@
       display: block;
     }
 
+    /* Visible scrollbars on dark theme — macOS auto-hide + low contrast
+       made them effectively invisible. Force them on for any scrollable
+       panel content. */
+    .panel > div::-webkit-scrollbar,
+    #tasks-graph-scroll::-webkit-scrollbar {
+      width: 10px;
+      height: 10px;
+    }
+    .panel > div::-webkit-scrollbar-thumb,
+    #tasks-graph-scroll::-webkit-scrollbar-thumb {
+      background: #30363d;
+      border-radius: 5px;
+    }
+    .panel > div::-webkit-scrollbar-thumb:hover,
+    #tasks-graph-scroll::-webkit-scrollbar-thumb:hover {
+      background: #484f58;
+    }
+    .panel > div::-webkit-scrollbar-track,
+    #tasks-graph-scroll::-webkit-scrollbar-track {
+      background: #0d1117;
+    }
+    .panel > div::-webkit-scrollbar-corner,
+    #tasks-graph-scroll::-webkit-scrollbar-corner {
+      background: #0d1117;
+    }
+
     /* ── Grid area assignments ── */
 
     #agents-panel      { grid-area: agents;   }
@@ -472,6 +498,46 @@ function renderTasksPanel(snapshot) {
 
 // === 5a-6 task graph SVG ===
 
+// Word-wrap a title into up to `maxLines` lines, each no longer than
+// `maxChars`. Splits on whitespace where possible; falls back to
+// hard-truncation on the last line if it still overflows.
+function wrapTitle(text, maxChars, maxLines) {
+  text = (text || "").trim();
+  if (!text) return [""];
+  const words = text.split(/\s+/);
+  const lines = [];
+  let cur = "";
+  for (const w of words) {
+    if (!cur) {
+      cur = w;
+    } else if ((cur + " " + w).length <= maxChars) {
+      cur += " " + w;
+    } else {
+      lines.push(cur);
+      cur = w;
+      if (lines.length === maxLines) break;
+    }
+  }
+  if (cur && lines.length < maxLines) lines.push(cur);
+
+  // Hard-clip lines that are still too long (e.g. one giant word).
+  for (let i = 0; i < lines.length; i++) {
+    if (lines[i].length > maxChars) {
+      lines[i] = lines[i].slice(0, maxChars - 1) + "…";
+    }
+  }
+
+  // If we ran out of room mid-text, ellipsise the last line.
+  const joinedLen = lines.join(" ").length;
+  if (joinedLen < text.length) {
+    const last = lines[lines.length - 1];
+    lines[lines.length - 1] = last.length >= maxChars - 1
+      ? last.slice(0, maxChars - 1) + "…"
+      : last + "…";
+  }
+  return lines;
+}
+
 function renderTaskGraph(snapshot) {
   const SVG_NS = "http://www.w3.org/2000/svg";
   const svg = document.getElementById("tasks-graph");
@@ -496,27 +562,28 @@ function renderTaskGraph(snapshot) {
     }
   }
 
-  // Initial inclusion based on status & recency
+  // Initial inclusion: any task updated within the last hour, regardless
+  // of status. Drops the long tail of stale failed/in_progress tasks from
+  // old sessions that used to clog the graph.
   const included = new Set();
   for (const t of tasksArray) {
-    if (nonTerminal.has(t.status)) {
-      included.add(t.id);
-    } else if (t.status === "completed") {
-      const updated = new Date(t.updated_at).getTime();
-      if (now - updated <= ONE_HOUR) included.add(t.id);
-    }
+    const updated = new Date(t.updated_at).getTime();
+    if (now - updated <= ONE_HOUR) included.add(t.id);
   }
 
-  // Add completed tasks that have a non‑terminal dependent
-  for (const t of tasksArray) {
-    if (t.status !== "completed") continue;
-    const deps = dependents.get(t.id);
-    if (!deps) continue;
-    for (const depId of deps) {
-      const depTask = idToTask.get(depId);
-      if (depTask && nonTerminal.has(depTask.status)) {
-        included.add(t.id);
-        break;
+  // Add older completed tasks ONLY if a recently-included task depends on
+  // them — preserves the visible upstream of any active chain.
+  let grew = true;
+  while (grew) {
+    grew = false;
+    for (const id of Array.from(included)) {
+      const t = idToTask.get(id);
+      if (!t) continue;
+      for (const depId of t.depends_on || []) {
+        if (!included.has(depId) && idToTask.has(depId)) {
+          included.add(depId);
+          grew = true;
+        }
       }
     }
   }
@@ -669,17 +736,27 @@ function renderTaskGraph(snapshot) {
       title.textContent = `${t.title} – ${t.status} – ${shortId}`;
       rect.appendChild(title);
 
+      // Word-wrap the title into up to 2 lines that fit within the box.
+      // For BOX_W=200 and font 13px monospace, ~24 chars fit per line.
+      const lines = wrapTitle(t.title || "", 24, 2);
+      const lineHeight = 15;
+      const startY = y + BOX_H / 2 - (lines.length - 1) * lineHeight / 2;
+
       const txt = document.createElementNS(SVG_NS, "text");
       txt.setAttribute("x", x + BOX_W / 2);
-      txt.setAttribute("y", y + BOX_H / 2);
+      txt.setAttribute("y", startY);
       txt.setAttribute("font-family", "monospace");
       txt.setAttribute("font-size", "13");
       txt.setAttribute("fill", "#c9d1d9");
       txt.setAttribute("text-anchor", "middle");
       txt.setAttribute("dominant-baseline", "middle");
-      let disp = t.title || "";
-      if (disp.length > 28) disp = disp.slice(0, 28) + "…";
-      txt.textContent = disp;
+      for (let li = 0; li < lines.length; li++) {
+        const tspan = document.createElementNS(SVG_NS, "tspan");
+        tspan.setAttribute("x", x + BOX_W / 2);
+        if (li > 0) tspan.setAttribute("dy", lineHeight);
+        tspan.textContent = lines[li];
+        txt.appendChild(tspan);
+      }
 
       svg.appendChild(rect);
       svg.appendChild(txt);
