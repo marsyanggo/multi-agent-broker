@@ -299,10 +299,11 @@ function renderAgentsPanel(snapshot) {
 
 // === 5a-5 tasks panel ===
 
-// Default to "ongoing" (anything not yet terminal) so the panel shows
+// Default to "active" (anything not yet terminal) so the panel shows
 // what's actively happening, not a long history of completed work.
-let currentFilter = 'ongoing';
-const ONGOING_STATUSES = new Set(['pending', 'blocked', 'assigned', 'in_progress']);
+// Renamed from "ongoing" to avoid confusion with the in_progress status.
+let currentFilter = 'active';
+const ACTIVE_STATUSES = new Set(['pending', 'blocked', 'assigned', 'in_progress']);
 const expandedTasks = new Set();
 let _tasks = [];
 
@@ -315,7 +316,7 @@ const _STATUS_COLORS = {
   blocked: '#8b949e',
 };
 
-const _FILTER_ORDER = ['ongoing', 'pending', 'blocked', 'in_progress', 'completed', 'failed', 'all'];
+const _FILTER_ORDER = ['active', 'pending', 'blocked', 'in_progress', 'completed', 'failed', 'all'];
 
 function _applyBtnStyle(btn, active) {
   btn.style.background = active ? '#1f6feb' : '#161b22';
@@ -403,8 +404,8 @@ function _renderList(tasks) {
 
   const filtered = currentFilter === 'all'
     ? tasks.slice()
-    : currentFilter === 'ongoing'
-      ? tasks.filter(t => ONGOING_STATUSES.has(t.status))
+    : currentFilter === 'active'
+      ? tasks.filter(t => ACTIVE_STATUSES.has(t.status))
       : tasks.filter(t => t.status === currentFilter);
 
   if (filtered.length === 0) {
@@ -483,7 +484,7 @@ function renderTasksPanel(snapshot) {
     statusCounts[t.status] = (statusCounts[t.status] || 0) + 1;
   });
 
-  const ongoingCount = _tasks.filter(t => ONGOING_STATUSES.has(t.status)).length;
+  const activeCount = _tasks.filter(t => ACTIVE_STATUSES.has(t.status)).length;
 
   _FILTER_ORDER.forEach(status => {
     const btn = document.createElement('button');
@@ -493,9 +494,9 @@ function renderTasksPanel(snapshot) {
     if (status === 'all') {
       count = _tasks.length;
       label = 'All';
-    } else if (status === 'ongoing') {
-      count = ongoingCount;
-      label = 'ongoing';
+    } else if (status === 'active') {
+      count = activeCount;
+      label = 'active';
     } else {
       count = statusCounts[status] || 0;
       label = status;
