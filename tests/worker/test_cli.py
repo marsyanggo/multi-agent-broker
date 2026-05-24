@@ -6,6 +6,7 @@ import pytest
 
 from mab.worker.adapters.anthropic import AnthropicAdapter
 from mab.worker.adapters.claude_cli import ClaudeCLIAdapter
+from mab.worker.adapters.gemini import GeminiAdapter
 from mab.worker.adapters.mock import MockAdapter
 from mab.worker.adapters.ollama import OllamaAdapter
 from mab.worker.cli import (
@@ -108,6 +109,25 @@ def test_build_adapter_claude_cli_no_skip_permissions() -> None:
     adapter = build_adapter(args)
     assert isinstance(adapter, ClaudeCLIAdapter)
     assert adapter.skip_permissions is False
+
+
+def test_build_adapter_gemini() -> None:
+    args = _parse(
+        "--broker-url", "http://x", "--api-key", "k",
+        "--model", "gemini-2.5-flash",
+        "--adapter", "gemini",
+        "--gemini-api-key", "test-key",
+        "--gemini-max-output-tokens", "512",
+        "--gemini-temperature", "0.4",
+        "--system-prompt", "be terse",
+    )
+    adapter = build_adapter(args)
+    assert isinstance(adapter, GeminiAdapter)
+    assert adapter.model == "gemini-2.5-flash"
+    assert adapter.api_key == "test-key"
+    assert adapter.max_output_tokens == 512
+    assert adapter.temperature == 0.4
+    assert adapter.system_prompt == "be terse"
 
 
 def test_build_adapter_mock() -> None:

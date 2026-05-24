@@ -15,6 +15,7 @@ import sys
 from mab.worker.adapters.anthropic import AnthropicAdapter
 from mab.worker.adapters.base import LLMAdapter
 from mab.worker.adapters.claude_cli import ClaudeCLIAdapter
+from mab.worker.adapters.gemini import GeminiAdapter
 from mab.worker.adapters.mock import MockAdapter
 from mab.worker.adapters.ollama import OllamaAdapter
 from mab.worker.daemon import WorkerDaemon, install_signal_handlers
@@ -22,7 +23,7 @@ from mab.worker.daemon import WorkerDaemon, install_signal_handlers
 log = logging.getLogger("mab.worker")
 
 
-ADAPTER_CHOICES = ("anthropic", "ollama", "claude-cli", "mock")
+ADAPTER_CHOICES = ("anthropic", "ollama", "claude-cli", "gemini", "mock")
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -105,6 +106,23 @@ def build_parser() -> argparse.ArgumentParser:
     g.add_argument("--anthropic-max-tokens", type=int, default=1024)
     g.add_argument("--anthropic-temperature", type=float, default=None)
 
+    # --- Gemini adapter ---
+    g = p.add_argument_group("gemini adapter")
+    g.add_argument(
+        "--gemini-api-key",
+        default=os.environ.get("GEMINI_API_KEY"),
+        help="Google AI Studio API key (default $GEMINI_API_KEY)",
+    )
+    g.add_argument(
+        "--gemini-base-url",
+        default=os.environ.get(
+            "GEMINI_BASE_URL", "https://generativelanguage.googleapis.com"
+        ),
+        help="Gemini API base URL (default Google AI Studio)",
+    )
+    g.add_argument("--gemini-max-output-tokens", type=int, default=1024)
+    g.add_argument("--gemini-temperature", type=float, default=None)
+
     # --- Ollama adapter ---
     g = p.add_argument_group("ollama adapter")
     g.add_argument(
@@ -122,11 +140,11 @@ def build_parser() -> argparse.ArgumentParser:
     )
 
     # --- shared adapter knobs ---
-    g = p.add_argument_group("LLM behaviour (anthropic / ollama)")
+    g = p.add_argument_group("LLM behaviour (anthropic / ollama / gemini)")
     g.add_argument(
         "--system-prompt",
         default=os.environ.get("MAB_SYSTEM_PROMPT"),
-        help="system prompt prepended to each task (for anthropic and ollama adapters)",
+        help="system prompt prepended to each task (anthropic / ollama / gemini)",
     )
 
     # --- Claude CLI adapter ---
@@ -179,6 +197,15 @@ def build_adapter(args: argparse.Namespace) -> LLMAdapter:
             model=args.model,
             base_url=args.ollama_base_url,
             api_key=args.ollama_api_key,
+            system_prompt=args.system_prompt,
+        )
+    if args.adapter == "gemini":
+        return GeminiAdapter(
+            model=args.model,
+            api_key=args.gemini_api_key,
+            base_url=args.gemini_base_url,
+            max_output_tokens=args.gemini_max_output_tokens,
+            temperature=args.gemini_temperature,
             system_prompt=args.system_prompt,
         )
     if args.adapter == "claude-cli":

@@ -35,6 +35,8 @@ ANTHROPIC_API_KEY_V="${ANTHROPIC_API_KEY:-}"
 ANTHROPIC_BASE_URL="${ANTHROPIC_BASE_URL:-https://api.anthropic.com}"
 OLLAMA_BASE_URL="${OLLAMA_BASE_URL:-http://localhost:11434}"
 OLLAMA_API_KEY_V="${OLLAMA_API_KEY:-}"
+GEMINI_API_KEY_V="${GEMINI_API_KEY:-}"
+GEMINI_BASE_URL="${GEMINI_BASE_URL:-https://generativelanguage.googleapis.com}"
 CLAUDE_BIN="${CLAUDE_BIN:-claude}"
 SYSTEM_PROMPT="${MAB_SYSTEM_PROMPT:-}"
 PER_TASK_TIMEOUT="${MAB_PER_TASK_TIMEOUT:-600}"
@@ -48,9 +50,9 @@ Usage: $0 [options]
 Required:
   --broker-url URL          broker REST endpoint
   --api-key KEY             mab-ak-... API key for this worker's agent
-  --adapter NAME            one of: anthropic, ollama, claude-cli, mock
+  --adapter NAME            one of: anthropic, ollama, claude-cli, gemini, mock
   --model MODEL             model identifier (e.g. claude-sonnet-4-6,
-                            gpt-oss:120b-cloud, llama3.3:70b)
+                            gpt-oss:120b-cloud, gemini-2.5-flash, llama3.3:70b)
 
 Optional (general):
   --name SUFFIX             unit name: mab-worker[-SUFFIX].service
@@ -58,7 +60,7 @@ Optional (general):
                             (creates mab-worker.service)
   --capabilities CSV        extra capability tags beyond --model derivation
   --system-prompt TEXT      system prompt prepended to each task
-                            (anthropic / ollama adapters)
+                            (anthropic / ollama / gemini adapters)
   --per-task-timeout SEC    hard timeout per task (default 600)
   --wait-for-task-timeout SEC  wait_for_task block timeout (default 60)
 
@@ -70,6 +72,10 @@ Ollama adapter:
   --ollama-base-url URL     default http://localhost:11434
                             (use https://ollama.com for Ollama Cloud)
   --ollama-api-key KEY      for Ollama Cloud (or \$OLLAMA_API_KEY)
+
+Gemini adapter:
+  --gemini-api-key KEY      Google AI Studio key (or \$GEMINI_API_KEY)
+  --gemini-base-url URL     default https://generativelanguage.googleapis.com
 
 Claude CLI adapter:
   --claude-bin PATH         default \$CLAUDE_BIN or "claude"
@@ -92,6 +98,8 @@ while [[ $# -gt 0 ]]; do
         --anthropic-base-url)    ANTHROPIC_BASE_URL="$2"; shift 2 ;;
         --ollama-base-url)       OLLAMA_BASE_URL="$2"; shift 2 ;;
         --ollama-api-key)        OLLAMA_API_KEY_V="$2"; shift 2 ;;
+        --gemini-api-key)        GEMINI_API_KEY_V="$2"; shift 2 ;;
+        --gemini-base-url)       GEMINI_BASE_URL="$2"; shift 2 ;;
         --claude-bin)            CLAUDE_BIN="$2"; shift 2 ;;
         --system-prompt)         SYSTEM_PROMPT="$2"; shift 2 ;;
         --per-task-timeout)      PER_TASK_TIMEOUT="$2"; shift 2 ;;
@@ -109,11 +117,14 @@ errs=()
 [[ -z "$ADAPTER" ]] && errs+=("--adapter required")
 [[ -z "$MODEL" ]] && errs+=("--model required")
 case "$ADAPTER" in
-    anthropic|ollama|claude-cli|mock) ;;
-    *) errs+=("--adapter must be one of: anthropic, ollama, claude-cli, mock (got '$ADAPTER')") ;;
+    anthropic|ollama|claude-cli|gemini|mock) ;;
+    *) errs+=("--adapter must be one of: anthropic, ollama, claude-cli, gemini, mock (got '$ADAPTER')") ;;
 esac
 if [[ "$ADAPTER" == "anthropic" && -z "$ANTHROPIC_API_KEY_V" ]]; then
     errs+=("anthropic adapter needs --anthropic-api-key or ANTHROPIC_API_KEY")
+fi
+if [[ "$ADAPTER" == "gemini" && -z "$GEMINI_API_KEY_V" ]]; then
+    errs+=("gemini adapter needs --gemini-api-key or GEMINI_API_KEY")
 fi
 if [[ ${#errs[@]} -gt 0 ]]; then
     for e in "${errs[@]}"; do echo "error: $e" >&2; done
@@ -189,6 +200,10 @@ case "$ADAPTER" in
     ollama)
         ENV_LINES+=("Environment=\"OLLAMA_BASE_URL=$OLLAMA_BASE_URL\"")
         [[ -n "$OLLAMA_API_KEY_V" ]] && ENV_LINES+=("Environment=\"OLLAMA_API_KEY=$OLLAMA_API_KEY_V\"")
+        ;;
+    gemini)
+        ENV_LINES+=("Environment=\"GEMINI_API_KEY=$GEMINI_API_KEY_V\"")
+        ENV_LINES+=("Environment=\"GEMINI_BASE_URL=$GEMINI_BASE_URL\"")
         ;;
     claude-cli)
         ENV_LINES+=("Environment=\"CLAUDE_BIN=$CLAUDE_BIN\"")

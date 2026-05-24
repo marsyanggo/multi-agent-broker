@@ -36,6 +36,12 @@ _KNOWN_MODEL_PREFIXES: dict[str, tuple[str, str]] = {
     "gemini-2.5-pro": ("google", "pro"),
     "gemini-2.5-flash-lite": ("google", "flash-lite"),
     "gemini-2.5-flash": ("google", "flash"),
+    "gemini-2.0-flash-thinking": ("google", "reasoning"),
+    "gemini-2.0-flash-lite": ("google", "flash-lite"),
+    "gemini-2.0-flash": ("google", "flash"),
+    "gemini-1.5-pro": ("google", "pro"),
+    "gemini-1.5-flash": ("google", "flash"),
+    "gemini": ("google", "gemini"),
     "gemma-3": ("google", "gemma-3"),
     "gemma": ("google", "gemma"),
     # Meta Llama
